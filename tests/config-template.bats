@@ -13,6 +13,10 @@
   [ "$status" -eq 0 ]
   [ "$output" != "null" ]
 
+  run yq '.spec' templates/config.yaml
+  [ "$status" -eq 0 ]
+  [ "$output" != "null" ]
+
   run yq '.app_runner' templates/config.yaml
   [ "$status" -eq 0 ]
   [ "$output" != "null" ]
