@@ -77,6 +77,12 @@ cp "$SPEC_FILE" "$MESSAGES_DIR/spec.md"
 init_workflow "$MESSAGES_DIR" "$SPEC_FILE" "$BRANCH_NAME" "$CFG_MAX_ROUNDS"
 create_session "$SESSION_NAME" "$CFG_DEV_AGENTS"
 
+# Unset CLAUDECODE in all panes so nested claude sessions can launch
+for pane_target in $(tmux list-panes -t "$SESSION_NAME" -a -F '#{pane_id}'); do
+  tmux send-keys -t "$pane_target" "unset CLAUDECODE" C-m
+done
+sleep 1
+
 # Start app runner
 if [[ -n "$CFG_APP_COMMAND" ]]; then
   send_to_pane "$SESSION_NAME" "app-runner" \
