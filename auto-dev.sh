@@ -176,13 +176,21 @@ send_to_pane "$SESSION_NAME" "dev-1" \
   "cd $REPO_DIR && git add -A && git commit -m 'auto-dev(round-${CURRENT_ROUND}): ${FEATURE_NAME}'"
 sleep 5
 
-PR_BODY="## Summary\n\nAutomated implementation of: $SPEC_FILE\n\n"
-PR_BODY+="## Review History\n\n"
-PR_BODY+="- Rounds completed: $CURRENT_ROUND / $CFG_MAX_ROUNDS\n"
-PR_BODY+="- Final verdict: $VERDICT\n"
-
+PR_BODY="## What\n\n"
+PR_BODY+="Automated implementation of feature spec: \`$FEATURE_NAME\`\n\n"
+PR_BODY+="Source: \`$SPEC_FILE\`\n\n"
 if [[ -f "$MESSAGES_DIR/reviewer-feedback.md" ]]; then
-  PR_BODY+="\n## Final Review\n\n$(cat "$MESSAGES_DIR/reviewer-feedback.md")\n"
+  PR_BODY+="### Changes\n\n$(grep -A 100 '## Summary' "$MESSAGES_DIR/reviewer-feedback.md" | head -5)\n\n"
+fi
+PR_BODY+="## Why\n\n"
+PR_BODY+="Feature requested via auto-dev spec. Implementation validated through $CURRENT_ROUND round(s) of automated code review.\n\n"
+PR_BODY+="## Expected Result / Proof\n\n"
+PR_BODY+="- Review rounds: $CURRENT_ROUND / $CFG_MAX_ROUNDS\n"
+PR_BODY+="- Final verdict: **$VERDICT**\n"
+if [[ -f "$MESSAGES_DIR/reviewer-feedback.md" ]]; then
+  SCORE="$(grep -o 'Score: [0-9]*/10' "$MESSAGES_DIR/reviewer-feedback.md" | tail -1)"
+  [[ -n "$SCORE" ]] && PR_BODY+="- Reviewer score: **$SCORE**\n"
+  PR_BODY+="\n<details><summary>Full review</summary>\n\n$(cat "$MESSAGES_DIR/reviewer-feedback.md")\n\n</details>\n"
 fi
 
 send_to_pane "$SESSION_NAME" "dev-1" \

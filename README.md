@@ -192,21 +192,22 @@ Setup → Development → Review → Iteration → Finalize
 - Implements the feature following `CLAUDE.md` standards
 - Runs tests
 - Monitors app output for failures
-- Commits and writes status
+- Leaves changes uncommitted and writes status
 
 **Phase 3: Review**
-- Reviewer agent diffs the changes
+- Reviewer agent reviews local (uncommitted) changes via `git diff`
 - Runs each configured review skill
 - Checks app output for runtime issues
 - Writes structured feedback with severity ratings
 - Gives verdict: `approved` or `changes_requested`
 
 **Phase 4: Iteration**
-- If `changes_requested` and under `max_rounds`: dev agent reads feedback, fixes issues, reviewer reviews again
+- If `changes_requested` and under `max_rounds`: orchestrator commits WIP, dev agent reads feedback, fixes issues, reviewer reviews again
 - If `approved` or at `max_rounds`: proceed to finalize
 
 **Phase 5: Finalize**
-- Creates a PR with spec summary, review history, and final verdict
+- Commits the approved changes
+- Creates a PR with structured description (What / Why / Expected Result)
 
 ### Agent Communication
 
@@ -342,7 +343,6 @@ Templates use `{{PLACEHOLDER}}` syntax. Available placeholders:
 | `{{ROUND}}` | Current round number |
 | `{{REVIEWER_SKILLS}}` | `reviewer.skills` from config |
 | `{{SEVERITY_GATE}}` | `reviewer.severity_gate` from config |
-| `{{BASE_BRANCH}}` | Base branch for git diff |
 | `{{SKILLS_LIST}}` | Formatted list of review skills |
 | `{{MAX_ROUNDS}}` | `workflow.max_rounds` from config |
 | `{{PHASE}}` | Current workflow phase |
