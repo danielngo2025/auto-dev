@@ -144,7 +144,7 @@ while true; do
   echo "$reviewer_prompt" > "$reviewer_prompt_file"
 
   send_to_pane "$SESSION_NAME" "reviewer" \
-    "cd $REPO_DIR && claude -p \"\$(cat $reviewer_prompt_file)\" --allowedTools 'Read,Bash,Grep,Glob'"
+    "cd $REPO_DIR && claude -p \"\$(cat $reviewer_prompt_file)\" --allowedTools 'Read,Write,Edit,Bash,Grep,Glob'"
 
   echo "Waiting for reviewer to complete round $CURRENT_ROUND..."
   while [[ "$(get_review_verdict "$MESSAGES_DIR")" = "pending" ]]; do

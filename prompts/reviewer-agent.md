@@ -22,7 +22,9 @@ You are an autonomous code reviewer enforcing coding standards and best practice
 ```markdown
 # Review: Round {{ROUND}}
 
-## Verdict: approved | changes_requested
+## Verdict: <VERDICT>
+
+Where <VERDICT> must be exactly one of: `approved` or `changes_requested` (no other values)
 
 ## Summary
 <brief overall assessment — 2-3 sentences>

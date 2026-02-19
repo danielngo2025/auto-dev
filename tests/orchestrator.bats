@@ -131,8 +131,13 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "should_continue returns false when pending" {
-  run should_continue "pending" 1 3
+@test "should_continue returns true for any non-approved verdict under max rounds" {
+  run should_continue "revise" 1 3
+  [ "$status" -eq 0 ]
+}
+
+@test "should_continue returns false for non-approved at max rounds" {
+  run should_continue "revise" 3 3
   [ "$status" -ne 0 ]
 }
 

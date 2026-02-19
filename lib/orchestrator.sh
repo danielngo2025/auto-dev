@@ -87,7 +87,11 @@ should_continue() {
   local current_round="$2"
   local max_rounds="$3"
 
-  if [[ "$verdict" == "changes_requested" ]] && (( current_round < max_rounds )); then
+  if [[ "$verdict" == "approved" ]]; then
+    return 1
+  fi
+
+  if (( current_round < max_rounds )); then
     return 0
   fi
 
