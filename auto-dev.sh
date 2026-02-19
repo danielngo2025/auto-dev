@@ -158,14 +158,23 @@ while true; do
     break
   fi
 
+  # Commit current round's work before starting next iteration
+  send_to_pane "$SESSION_NAME" "dev-1" \
+    "cd $REPO_DIR && git add -A && git commit -m 'auto-dev(round-${CURRENT_ROUND}): address review feedback [wip]'"
+  sleep 5
+
   increment_round "$MESSAGES_DIR"
   CURRENT_ROUND=$((CURRENT_ROUND + 1))
   rm -f "$MESSAGES_DIR"/dev-*-status.json
   rm -f "$MESSAGES_DIR/reviewer-feedback.md"
 done
 
-# --- Finalize ---
+# --- Commit approved changes ---
 update_summary_phase "$MESSAGES_DIR" "finalizing"
+
+send_to_pane "$SESSION_NAME" "dev-1" \
+  "cd $REPO_DIR && git add -A && git commit -m 'auto-dev(round-${CURRENT_ROUND}): ${FEATURE_NAME}'"
+sleep 5
 
 PR_BODY="## Summary\n\nAutomated implementation of: $SPEC_FILE\n\n"
 PR_BODY+="## Review History\n\n"

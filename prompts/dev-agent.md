@@ -29,7 +29,7 @@ You are an autonomous development agent implementing a feature from a spec.
    }
    STATUSEOF
    ```
-7. Git commit with message format: `auto-dev(round-{{ROUND}}): <description>`
+7. Do NOT commit your changes — leave them as local modifications. The orchestrator will commit after the reviewer approves.
 
 ## Round > 1 Instructions
 
