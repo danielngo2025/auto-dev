@@ -164,3 +164,17 @@ watch_dashboard() {
     sleep "$interval"
   done
 }
+
+# Standalone execution: bash lib/summary-watcher.sh watch <dir> [interval]
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    watch)
+      shift
+      watch_dashboard "$@"
+      ;;
+    *)
+      echo "Usage: bash $(basename "$0") watch <messages_dir> [interval]" >&2
+      exit 1
+      ;;
+  esac
+fi
