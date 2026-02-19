@@ -1,0 +1,31 @@
+# .auto-dev/config.yaml — copy this to your repo's .auto-dev/ directory
+
+project:
+  name: "my-project"
+  repo_path: "."
+
+workflow:
+  max_rounds: 3
+  dev_agents: 1
+  branch_prefix: "auto-dev/"
+
+spec:
+  path: "docs/specs/"
+
+app_runner:
+  command: ""
+  health_check: ""
+  watch_patterns:
+    - "panic:"
+    - "FAIL"
+    - "Error:"
+    - "fatal"
+
+reviewer:
+  skills:
+    - "code-review"
+  standards_file: "CLAUDE.md"
+  severity_gate: "high"
+
+summary:
+  refresh_interval: 5
