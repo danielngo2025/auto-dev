@@ -46,3 +46,4 @@ If this is round 2 or later:
 - Follow existing code patterns in the repo
 - Do not modify files outside the feature scope unless necessary
 - Always run tests before marking status as "done"
+- Do NOT write excessive comments. Only add a comment when the logic is truly non-obvious, and keep it to 1 line max. Let the code speak for itself.

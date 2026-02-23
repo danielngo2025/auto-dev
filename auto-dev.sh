@@ -160,7 +160,7 @@ while true; do
 
   # Commit current round's work before starting next iteration
   send_to_pane "$SESSION_NAME" "dev-1" \
-    "cd $REPO_DIR && git add -A && git commit -m 'auto-dev(round-${CURRENT_ROUND}): address review feedback [wip]'"
+    "cd $REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'wip: address review feedback'"
   sleep 5
 
   increment_round "$MESSAGES_DIR"
@@ -173,7 +173,7 @@ done
 update_summary_phase "$MESSAGES_DIR" "finalizing"
 
 send_to_pane "$SESSION_NAME" "dev-1" \
-  "cd $REPO_DIR && git add -A && git commit -m 'auto-dev(round-${CURRENT_ROUND}): ${FEATURE_NAME}'"
+  "cd $REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'feat: ${FEATURE_NAME}'"
 sleep 5
 
 PR_BODY="## What\n\n"
