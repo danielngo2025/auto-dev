@@ -80,6 +80,7 @@ fi
 
 # --- Setup ---
 mkdir -p "$MESSAGES_DIR"
+rm -f "$MESSAGES_DIR/costs.log" "$MESSAGES_DIR/tokens.log"
 cp "$SPEC_FILE" "$MESSAGES_DIR/spec.md"
 init_workflow "$MESSAGES_DIR" "$SPEC_FILE" "$BRANCH_NAME" "$CFG_MAX_ROUNDS"
 create_session "$SESSION_NAME" "$CFG_DEV_AGENTS"

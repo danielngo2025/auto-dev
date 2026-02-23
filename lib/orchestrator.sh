@@ -149,7 +149,7 @@ get_total_tokens() {
   awk '{s+=$1} END {printf "%d", s+0}' "$tokens_file"
 }
 
-# Prints a live progress line showing elapsed time, files changed, cost, tokens, and agent activity.
+# Prints a live progress line showing elapsed time, files changed, cost, tokens, and recent activity.
 # Args: <repo_dir> <session_name> <pane_role> <start_time> <phase_label> <messages_dir>
 show_progress() {
   local repo_dir="$1"
@@ -163,22 +163,20 @@ show_progress() {
   local mins=$(( elapsed / 60 ))
   local secs=$(( elapsed % 60 ))
 
+  local changed_files
+  changed_files="$(cd "$repo_dir" && git diff --name-only 2>/dev/null)"
   local file_count
-  file_count="$(cd "$repo_dir" && git diff --name-only 2>/dev/null | wc -l | tr -d ' ')"
+  file_count="$(echo "$changed_files" | grep -c . 2>/dev/null || echo "0")"
+  local last_file
+  last_file="$(echo "$changed_files" | tail -1 | xargs basename 2>/dev/null || echo "")"
 
   local cost
   cost="$(get_total_cost "$messages_dir")"
   local tokens
   tokens="$(get_total_tokens "$messages_dir")"
 
-  local pane_id="${PANE_MAP[$pane_role]:-}"
-  local last_line=""
-  if [[ -n "$pane_id" ]]; then
-    last_line="$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null | grep -v '^$' | tail -1 | cut -c1-60)"
-  fi
-
   printf "\r\033[K  [%02d:%02d / %ds] %s | %s files | \$%s | %s tok | %s" \
-    "$mins" "$secs" "$elapsed" "$phase_label" "$file_count" "$cost" "$tokens" "$last_line"
+    "$mins" "$secs" "$elapsed" "$phase_label" "$file_count" "$cost" "$tokens" "$last_file"
 }
 
 # Waits for a keypress or timeout. Returns 0 if user pressed ESC or 'q' (abort).
