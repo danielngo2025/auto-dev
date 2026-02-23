@@ -125,6 +125,32 @@ increment_round() {
   mv "$tmp_file" "$summary_file"
 }
 
+# Prints a live progress line showing elapsed time, files changed, and agent activity.
+# Args: <repo_dir> <session_name> <pane_role> <start_time> <phase_label>
+show_progress() {
+  local repo_dir="$1"
+  local session_name="$2"
+  local pane_role="$3"
+  local start_time="$4"
+  local phase_label="$5"
+
+  local elapsed=$(( $(date +%s) - start_time ))
+  local mins=$(( elapsed / 60 ))
+  local secs=$(( elapsed % 60 ))
+
+  local file_count
+  file_count="$(cd "$repo_dir" && git diff --name-only 2>/dev/null | wc -l | tr -d ' ')"
+
+  local pane_id="${PANE_MAP[$pane_role]:-}"
+  local last_line=""
+  if [[ -n "$pane_id" ]]; then
+    last_line="$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null | grep -v '^$' | tail -1 | cut -c1-80)"
+  fi
+
+  printf "\r\033[K  [%02d:%02d] %s | %s files changed | %s" \
+    "$mins" "$secs" "$phase_label" "$file_count" "$last_line"
+}
+
 # Updates an agent's status in the agents object of summary.json.
 # Args: <messages_dir> <agent_name> <status>
 update_agent_status() {

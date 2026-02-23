@@ -161,10 +161,16 @@ while true; do
       "cd \$REPO_DIR && claude -p \"\\\$(cat \$prompt_file)\" --allowedTools 'Edit,Write,Read,Bash,Grep,Glob'"
   done
 
-  echo "Waiting for dev agent(s) to complete round \$CURRENT_ROUND..."
+  echo ""
+  echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Development ==="
+  DEV_START=\$(date +%s)
   while ! check_dev_status "\$MESSAGES_DIR" "\$CFG_DEV_AGENTS"; do
-    sleep 10
+    show_progress "\$REPO_DIR" "\$SESSION_NAME" "dev-1" "\$DEV_START" "dev implementing"
+    sleep 5
   done
+  echo ""
+  echo "  Dev agent(s) complete."
+  echo ""
 
   update_summary_phase "\$MESSAGES_DIR" "review"
   update_agent_status "\$MESSAGES_DIR" "reviewer" "reviewing"
@@ -183,18 +189,24 @@ while true; do
   send_to_pane "\$SESSION_NAME" "reviewer" \
     "cd \$REPO_DIR && claude -p \"\\\$(cat \$reviewer_prompt_file)\" --allowedTools 'Read,Write,Edit,Bash,Grep,Glob'"
 
-  echo "Waiting for reviewer to complete round \$CURRENT_ROUND..."
+  echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
+  REV_START=\$(date +%s)
   while [[ "\$(get_review_verdict "\$MESSAGES_DIR")" = "pending" ]]; do
-    sleep 10
+    show_progress "\$REPO_DIR" "\$SESSION_NAME" "reviewer" "\$REV_START" "reviewing"
+    sleep 5
   done
+  echo ""
 
   VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
   update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
+  echo "  Verdict: \$VERDICT"
 
   if ! should_continue "\$VERDICT" "\$CURRENT_ROUND" "\$CFG_MAX_ROUNDS"; then
     break
   fi
 
+  echo ""
+  echo "  Committing WIP and starting next round..."
   send_to_pane "\$SESSION_NAME" "dev-1" \
     "cd \$REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'wip: address review feedback'"
   sleep 5
