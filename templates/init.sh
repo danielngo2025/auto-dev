@@ -13,6 +13,7 @@ echo "Initializing .auto-dev in: $TARGET_DIR"
 mkdir -p "$TARGET_DIR/.auto-dev/messages"
 mkdir -p "$TARGET_DIR/.auto-dev/prompts"
 mkdir -p "$TARGET_DIR/.auto-dev/skills"
+mkdir -p "$TARGET_DIR/.auto-dev/specs"
 
 # Copy config template if not already present
 if [[ ! -f "$TARGET_DIR/.auto-dev/config.yaml" ]]; then

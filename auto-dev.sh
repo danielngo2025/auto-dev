@@ -16,10 +16,10 @@ DRY_RUN=false
 DETACHED=false
 
 usage() {
-  echo "Usage: auto-dev.sh --spec <spec.md> --repo <path> [--dry-run] [--detached]"
+  echo "Usage: auto-dev.sh [--spec <spec.md>] --repo <path> [--dry-run] [--detached]"
   echo ""
   echo "Options:"
-  echo "  --spec <file>    Path to the feature spec markdown file"
+  echo "  --spec <file>    Path to the feature spec (default: first .md in .auto-dev/specs/)"
   echo "  --repo <path>    Path to the target repository (default: .)"
   echo "  --dry-run        Show the execution plan without running"
   echo "  --detached       Run tmux session in detached mode (for CI)"
@@ -36,9 +36,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z "$SPEC_FILE" ]] && usage
+# --- Resolve spec file ---
+if [[ -z "$SPEC_FILE" ]]; then
+  SPECS_DIR="$REPO_DIR/.auto-dev/specs"
+  if [[ -d "$SPECS_DIR" ]]; then
+    SPEC_FILE="$(find "$SPECS_DIR" -maxdepth 1 -name '*.md' -type f | head -1)"
+  fi
+  [[ -z "$SPEC_FILE" ]] && echo "Error: no spec provided and no .md files in .auto-dev/specs/" >&2 && exit 1
+fi
 
-# --- Validation ---
 [[ ! -f "$SPEC_FILE" ]] && echo "Error: spec file not found: $SPEC_FILE" >&2 && exit 1
 
 CONFIG_FILE="$REPO_DIR/.auto-dev/config.yaml"
@@ -46,6 +52,7 @@ CONFIG_FILE="$REPO_DIR/.auto-dev/config.yaml"
 
 parse_config "$CONFIG_FILE"
 
+REPO_DIR="$(cd "$REPO_DIR" && pwd)"
 MESSAGES_DIR="$REPO_DIR/.auto-dev/messages"
 PROMPTS_DIR="$REPO_DIR/.auto-dev/prompts"
 FEATURE_NAME="$(basename "$SPEC_FILE" .md)"
@@ -100,110 +107,148 @@ for pattern in "${CFG_WATCH_PATTERNS[@]}"; do
   WATCH_PATTERNS_STR="${WATCH_PATTERNS_STR} \"${pattern}\""
 done
 
-# --- Main loop ---
+# --- Write orchestrator script to run inside tmux ---
+ORCHESTRATOR_SCRIPT="$MESSAGES_DIR/_orchestrator.sh"
+cat > "$ORCHESTRATOR_SCRIPT" << ORCHEOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$SCRIPT_DIR"
+source "\$SCRIPT_DIR/lib/orchestrator.sh"
+source "\$SCRIPT_DIR/lib/prompt-renderer.sh"
+source "\$SCRIPT_DIR/lib/tmux-setup.sh"
+
+MESSAGES_DIR="$MESSAGES_DIR"
+PROMPTS_DIR="$PROMPTS_DIR"
+REPO_DIR="$REPO_DIR"
+SESSION_NAME="$SESSION_NAME"
+FEATURE_NAME="$FEATURE_NAME"
+SPEC_FILE="$SPEC_FILE"
+CFG_DEV_AGENTS=$CFG_DEV_AGENTS
+CFG_MAX_ROUNDS=$CFG_MAX_ROUNDS
+CFG_STANDARDS_FILE="$CFG_STANDARDS_FILE"
+CFG_SEVERITY_GATE="$CFG_SEVERITY_GATE"
+SKILLS_LIST="$SKILLS_LIST"
+WATCH_PATTERNS_STR="$WATCH_PATTERNS_STR"
+
+# Rebuild PANE_MAP
+declare -gA PANE_MAP=()
+PANE_MAP["summary"]="\${SESSION_NAME}:0.0"
+PANE_MAP["app-runner"]="\${SESSION_NAME}:0.1"
+PANE_MAP["reviewer"]="\${SESSION_NAME}:0.2"
+for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
+  PANE_MAP["dev-\${i}"]="\${SESSION_NAME}:0.\$((i + 2))"
+done
+
 CURRENT_ROUND=1
 
 while true; do
-  update_summary_phase "$MESSAGES_DIR" "development"
+  update_summary_phase "\$MESSAGES_DIR" "development"
 
-  # Launch dev agents
   for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
-    rendered_prompt="$(render_prompt "$PROMPTS_DIR/dev-agent.md" \
-      "STANDARDS_FILE=$CFG_STANDARDS_FILE" \
-      "WATCH_PATTERNS=$WATCH_PATTERNS_STR" \
-      "AGENT_ID=$i" \
-      "ROUND=$CURRENT_ROUND")"
+    rendered_prompt="\$(render_prompt "\$PROMPTS_DIR/dev-agent.md" \
+      "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
+      "WATCH_PATTERNS=\$WATCH_PATTERNS_STR" \
+      "AGENT_ID=\$i" \
+      "ROUND=\$CURRENT_ROUND")"
 
-    prompt_file="$MESSAGES_DIR/dev-${i}-prompt-r${CURRENT_ROUND}.md"
-    echo "$rendered_prompt" > "$prompt_file"
+    prompt_file="\$MESSAGES_DIR/dev-\${i}-prompt-r\${CURRENT_ROUND}.md"
+    echo "\$rendered_prompt" > "\$prompt_file"
 
-    update_agent_status "$MESSAGES_DIR" "dev-$i" "implementing"
+    update_agent_status "\$MESSAGES_DIR" "dev-\$i" "implementing"
 
-    send_to_pane "$SESSION_NAME" "dev-$i" \
-      "cd $REPO_DIR && claude -p \"\$(cat $prompt_file)\" --allowedTools 'Edit,Write,Read,Bash,Grep,Glob'"
+    send_to_pane "\$SESSION_NAME" "dev-\$i" \
+      "cd \$REPO_DIR && claude -p \"\\\$(cat \$prompt_file)\" --allowedTools 'Edit,Write,Read,Bash,Grep,Glob'"
   done
 
-  echo "Waiting for dev agent(s) to complete round $CURRENT_ROUND..."
-  while ! check_dev_status "$MESSAGES_DIR" "$CFG_DEV_AGENTS"; do
+  echo "Waiting for dev agent(s) to complete round \$CURRENT_ROUND..."
+  while ! check_dev_status "\$MESSAGES_DIR" "\$CFG_DEV_AGENTS"; do
     sleep 10
   done
 
-  # Launch reviewer
-  update_summary_phase "$MESSAGES_DIR" "review"
-  update_agent_status "$MESSAGES_DIR" "reviewer" "reviewing"
+  update_summary_phase "\$MESSAGES_DIR" "review"
+  update_agent_status "\$MESSAGES_DIR" "reviewer" "reviewing"
 
-  reviewer_prompt="$(render_prompt "$PROMPTS_DIR/reviewer-agent.md" \
-    "STANDARDS_FILE=$CFG_STANDARDS_FILE" \
+  reviewer_prompt="\$(render_prompt "\$PROMPTS_DIR/reviewer-agent.md" \
+    "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
     "REVIEWER_SKILLS=${CFG_REVIEWER_SKILLS[*]}" \
-    "SEVERITY_GATE=$CFG_SEVERITY_GATE" \
+    "SEVERITY_GATE=\$CFG_SEVERITY_GATE" \
     "BASE_BRANCH=main" \
-    "ROUND=$CURRENT_ROUND" \
-    "SKILLS_LIST=$SKILLS_LIST")"
+    "ROUND=\$CURRENT_ROUND" \
+    "SKILLS_LIST=\$SKILLS_LIST")"
 
-  reviewer_prompt_file="$MESSAGES_DIR/reviewer-prompt-r${CURRENT_ROUND}.md"
-  echo "$reviewer_prompt" > "$reviewer_prompt_file"
+  reviewer_prompt_file="\$MESSAGES_DIR/reviewer-prompt-r\${CURRENT_ROUND}.md"
+  echo "\$reviewer_prompt" > "\$reviewer_prompt_file"
 
-  send_to_pane "$SESSION_NAME" "reviewer" \
-    "cd $REPO_DIR && claude -p \"\$(cat $reviewer_prompt_file)\" --allowedTools 'Read,Write,Edit,Bash,Grep,Glob'"
+  send_to_pane "\$SESSION_NAME" "reviewer" \
+    "cd \$REPO_DIR && claude -p \"\\\$(cat \$reviewer_prompt_file)\" --allowedTools 'Read,Write,Edit,Bash,Grep,Glob'"
 
-  echo "Waiting for reviewer to complete round $CURRENT_ROUND..."
-  while [[ "$(get_review_verdict "$MESSAGES_DIR")" = "pending" ]]; do
+  echo "Waiting for reviewer to complete round \$CURRENT_ROUND..."
+  while [[ "\$(get_review_verdict "\$MESSAGES_DIR")" = "pending" ]]; do
     sleep 10
   done
 
-  VERDICT="$(get_review_verdict "$MESSAGES_DIR")"
-  update_agent_status "$MESSAGES_DIR" "reviewer" "done"
+  VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
+  update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
 
-  if ! should_continue "$VERDICT" "$CURRENT_ROUND" "$CFG_MAX_ROUNDS"; then
+  if ! should_continue "\$VERDICT" "\$CURRENT_ROUND" "\$CFG_MAX_ROUNDS"; then
     break
   fi
 
-  # Commit current round's work before starting next iteration
-  send_to_pane "$SESSION_NAME" "dev-1" \
-    "cd $REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'wip: address review feedback'"
+  send_to_pane "\$SESSION_NAME" "dev-1" \
+    "cd \$REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'wip: address review feedback'"
   sleep 5
 
-  increment_round "$MESSAGES_DIR"
-  CURRENT_ROUND=$((CURRENT_ROUND + 1))
-  rm -f "$MESSAGES_DIR"/dev-*-status.json
-  rm -f "$MESSAGES_DIR/reviewer-feedback.md"
+  increment_round "\$MESSAGES_DIR"
+  CURRENT_ROUND=\$((CURRENT_ROUND + 1))
+  rm -f "\$MESSAGES_DIR"/dev-*-status.json
+  rm -f "\$MESSAGES_DIR/reviewer-feedback.md"
 done
 
 # --- Commit approved changes ---
-update_summary_phase "$MESSAGES_DIR" "finalizing"
+update_summary_phase "\$MESSAGES_DIR" "finalizing"
 
-send_to_pane "$SESSION_NAME" "dev-1" \
-  "cd $REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'feat: ${FEATURE_NAME}'"
+send_to_pane "\$SESSION_NAME" "dev-1" \
+  "cd \$REPO_DIR && git add -A -- . ':!.auto-dev' && git commit -m 'feat: \${FEATURE_NAME}'"
 sleep 5
 
 PR_BODY="## What\n\n"
-PR_BODY+="Automated implementation of feature spec: \`$FEATURE_NAME\`\n\n"
-PR_BODY+="Source: \`$SPEC_FILE\`\n\n"
-if [[ -f "$MESSAGES_DIR/reviewer-feedback.md" ]]; then
-  PR_BODY+="### Changes\n\n$(grep -A 100 '## Summary' "$MESSAGES_DIR/reviewer-feedback.md" | head -5)\n\n"
+PR_BODY+="Automated implementation of feature spec: \\\`\$FEATURE_NAME\\\`\n\n"
+PR_BODY+="Source: \\\`\$SPEC_FILE\\\`\n\n"
+if [[ -f "\$MESSAGES_DIR/reviewer-feedback.md" ]]; then
+  PR_BODY+="### Changes\n\n\$(grep -A 100 '## Summary' "\$MESSAGES_DIR/reviewer-feedback.md" | head -5)\n\n"
 fi
 PR_BODY+="## Why\n\n"
-PR_BODY+="Feature requested via auto-dev spec. Implementation validated through $CURRENT_ROUND round(s) of automated code review.\n\n"
+PR_BODY+="Feature requested via auto-dev spec. Implementation validated through \$CURRENT_ROUND round(s) of automated code review.\n\n"
 PR_BODY+="## Expected Result / Proof\n\n"
-PR_BODY+="- Review rounds: $CURRENT_ROUND / $CFG_MAX_ROUNDS\n"
-PR_BODY+="- Final verdict: **$VERDICT**\n"
-if [[ -f "$MESSAGES_DIR/reviewer-feedback.md" ]]; then
-  SCORE="$(grep -o 'Score: [0-9]*/10' "$MESSAGES_DIR/reviewer-feedback.md" | tail -1)"
-  [[ -n "$SCORE" ]] && PR_BODY+="- Reviewer score: **$SCORE**\n"
-  PR_BODY+="\n<details><summary>Full review</summary>\n\n$(cat "$MESSAGES_DIR/reviewer-feedback.md")\n\n</details>\n"
+PR_BODY+="- Review rounds: \$CURRENT_ROUND / \$CFG_MAX_ROUNDS\n"
+PR_BODY+="- Final verdict: **\$VERDICT**\n"
+if [[ -f "\$MESSAGES_DIR/reviewer-feedback.md" ]]; then
+  SCORE="\$(grep -o 'Score: [0-9]*/10' "\$MESSAGES_DIR/reviewer-feedback.md" | tail -1)"
+  [[ -n "\$SCORE" ]] && PR_BODY+="- Reviewer score: **\$SCORE**\n"
+  PR_BODY+="\n<details><summary>Full review</summary>\n\n\$(cat "\$MESSAGES_DIR/reviewer-feedback.md")\n\n</details>\n"
 fi
 
-send_to_pane "$SESSION_NAME" "dev-1" \
-  "cd $REPO_DIR && gh pr create --title 'auto-dev: $FEATURE_NAME' --body \"$(echo -e "$PR_BODY")\""
+send_to_pane "\$SESSION_NAME" "dev-1" \
+  "cd \$REPO_DIR && gh pr create --title 'auto-dev: \$FEATURE_NAME' --body \"\$(echo -e "\$PR_BODY")\""
 
-update_summary_phase "$MESSAGES_DIR" "complete"
+update_summary_phase "\$MESSAGES_DIR" "complete"
+echo "Auto-dev complete. Branch: $BRANCH_NAME"
+ORCHEOF
 
-# Start dashboard
+chmod +x "$ORCHESTRATOR_SCRIPT"
+
+# --- Launch orchestrator in summary pane, attach immediately ---
 send_to_pane "$SESSION_NAME" "summary" \
-  "bash $SCRIPT_DIR/lib/summary-watcher.sh watch $MESSAGES_DIR $CFG_REFRESH_INTERVAL"
+  "bash $ORCHESTRATOR_SCRIPT 2>&1 | tee $MESSAGES_DIR/orchestrator.log"
 
 if [[ "$DETACHED" = false ]]; then
   tmux attach-session -t "$SESSION_NAME"
+else
+  echo "Auto-dev running in detached mode. Attach with: tmux attach -t $SESSION_NAME"
+  # Wait for orchestrator to finish
+  while [[ "$(jq -r '.phase' "$MESSAGES_DIR/summary.json" 2>/dev/null)" != "complete" ]]; do
+    sleep 10
+  done
+  echo "Auto-dev complete. Branch: $BRANCH_NAME"
 fi
-
-echo "Auto-dev complete. Branch: $BRANCH_NAME"
