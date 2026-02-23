@@ -193,6 +193,32 @@ EOF
   [ "$agent_status" = "done" ]
 }
 
+@test "get_total_cost returns 0 when no costs file" {
+  local cost
+  cost="$(get_total_cost "$MESSAGES_DIR")"
+  [ "$cost" = "0.0000" ]
+}
+
+@test "get_total_cost sums multiple entries" {
+  printf "0.0100\n0.0250\n0.0050\n" > "$MESSAGES_DIR/costs.log"
+  local cost
+  cost="$(get_total_cost "$MESSAGES_DIR")"
+  [ "$cost" = "0.0400" ]
+}
+
+@test "get_total_tokens returns 0 when no tokens file" {
+  local tokens
+  tokens="$(get_total_tokens "$MESSAGES_DIR")"
+  [ "$tokens" = "0" ]
+}
+
+@test "get_total_tokens sums multiple entries" {
+  printf "1500\n3200\n800\n" > "$MESSAGES_DIR/tokens.log"
+  local tokens
+  tokens="$(get_total_tokens "$MESSAGES_DIR")"
+  [ "$tokens" = "5500" ]
+}
+
 @test "update_agent_status preserves other agents" {
   echo '{"phase":"development","round":1,"agents":{"dev-1":{"status":"done"},"reviewer":{"status":"waiting"}}}' > "$MESSAGES_DIR/summary.json"
   update_agent_status "$MESSAGES_DIR" "reviewer" "reviewing"

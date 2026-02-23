@@ -107,6 +107,40 @@ for pattern in "${CFG_WATCH_PATTERNS[@]}"; do
   WATCH_PATTERNS_STR="${WATCH_PATTERNS_STR} \"${pattern}\""
 done
 
+# --- Write agent runner wrapper (captures cost/token data via JSON output) ---
+AGENT_RUNNER="$MESSAGES_DIR/_run-claude.sh"
+cat > "$AGENT_RUNNER" << 'RUNEOF'
+#!/usr/bin/env bash
+prompt_file="$1"
+output_file="$2"
+costs_file="$3"
+tokens_file="$4"
+tools="$5"
+repo_dir="$6"
+
+cd "$repo_dir"
+echo "Agent starting..."
+
+claude -p "$(cat "$prompt_file")" --allowedTools "$tools" --output-format json > "$output_file" 2>&1 || true
+
+if [ -f "$output_file" ] && command -v jq >/dev/null 2>&1; then
+  cost=$(jq -r '.total_cost_usd // .cost_usd // 0' "$output_file" 2>/dev/null || echo "0")
+  turns=$(jq -r '.num_turns // 0' "$output_file" 2>/dev/null || echo "0")
+  in_tok=$(jq -r '.usage.input_tokens // 0' "$output_file" 2>/dev/null || echo "0")
+  out_tok=$(jq -r '.usage.output_tokens // 0' "$output_file" 2>/dev/null || echo "0")
+  total_tok=$((in_tok + out_tok))
+  echo "$cost" >> "$costs_file"
+  echo "$total_tok" >> "$tokens_file"
+  echo ""
+  echo "Done. Cost: \$$cost | Tokens: $total_tok ($in_tok in / $out_tok out) | Turns: $turns"
+else
+  echo "0" >> "$costs_file"
+  echo "0" >> "$tokens_file"
+  echo "Done."
+fi
+RUNEOF
+chmod +x "$AGENT_RUNNER"
+
 # --- Write orchestrator script to run inside tmux ---
 ORCHESTRATOR_SCRIPT="$MESSAGES_DIR/_orchestrator.sh"
 cat > "$ORCHESTRATOR_SCRIPT" << ORCHEOF
@@ -142,6 +176,19 @@ done
 
 CURRENT_ROUND=1
 
+# Cleanup on abort
+abort_workflow() {
+  echo ""
+  echo "  Aborted by user. Cleaning up..."
+  update_summary_phase "\$MESSAGES_DIR" "aborted"
+  kill_session "\$SESSION_NAME" 2>/dev/null || true
+  exit 1
+}
+trap abort_workflow INT TERM
+
+echo "  Press ESC or 'q' to abort workflow."
+echo ""
+
 while true; do
   update_summary_phase "\$MESSAGES_DIR" "development"
 
@@ -158,15 +205,17 @@ while true; do
     update_agent_status "\$MESSAGES_DIR" "dev-\$i" "implementing"
 
     send_to_pane "\$SESSION_NAME" "dev-\$i" \
-      "cd \$REPO_DIR && claude -p \"\\\$(cat \$prompt_file)\" --allowedTools 'Edit,Write,Read,Bash,Grep,Glob'"
+      "bash \$MESSAGES_DIR/_run-claude.sh \$prompt_file \$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.json \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Edit,Write,Read,Bash,Grep,Glob' \$REPO_DIR"
   done
 
   echo ""
   echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Development ==="
   DEV_START=\$(date +%s)
   while ! check_dev_status "\$MESSAGES_DIR" "\$CFG_DEV_AGENTS"; do
-    show_progress "\$REPO_DIR" "\$SESSION_NAME" "dev-1" "\$DEV_START" "dev implementing"
-    sleep 5
+    show_progress "\$REPO_DIR" "\$SESSION_NAME" "dev-1" "\$DEV_START" "dev implementing" "\$MESSAGES_DIR"
+    if wait_or_abort 5; then
+      abort_workflow
+    fi
   done
   echo ""
   echo "  Dev agent(s) complete."
@@ -187,13 +236,15 @@ while true; do
   echo "\$reviewer_prompt" > "\$reviewer_prompt_file"
 
   send_to_pane "\$SESSION_NAME" "reviewer" \
-    "cd \$REPO_DIR && claude -p \"\\\$(cat \$reviewer_prompt_file)\" --allowedTools 'Read,Write,Edit,Bash,Grep,Glob'"
+    "bash \$MESSAGES_DIR/_run-claude.sh \$reviewer_prompt_file \$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.json \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Read,Write,Edit,Bash,Grep,Glob' \$REPO_DIR"
 
   echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
   REV_START=\$(date +%s)
   while [[ "\$(get_review_verdict "\$MESSAGES_DIR")" = "pending" ]]; do
-    show_progress "\$REPO_DIR" "\$SESSION_NAME" "reviewer" "\$REV_START" "reviewing"
-    sleep 5
+    show_progress "\$REPO_DIR" "\$SESSION_NAME" "reviewer" "\$REV_START" "reviewing" "\$MESSAGES_DIR"
+    if wait_or_abort 5; then
+      abort_workflow
+    fi
   done
   echo ""
 
@@ -245,7 +296,11 @@ send_to_pane "\$SESSION_NAME" "dev-1" \
   "cd \$REPO_DIR && gh pr create --title 'auto-dev: \$FEATURE_NAME' --body \"\$(echo -e "\$PR_BODY")\""
 
 update_summary_phase "\$MESSAGES_DIR" "complete"
+FINAL_COST="\$(get_total_cost "\$MESSAGES_DIR")"
+FINAL_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
+echo ""
 echo "Auto-dev complete. Branch: $BRANCH_NAME"
+echo "  Total cost: \\\$\$FINAL_COST | Total tokens: \$FINAL_TOKENS"
 ORCHEOF
 
 chmod +x "$ORCHESTRATOR_SCRIPT"
