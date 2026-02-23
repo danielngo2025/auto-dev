@@ -16,7 +16,9 @@ create_session() {
   # Reset the pane map for a fresh session.
   PANE_MAP=()
 
-  # Create session with first window (summary pane).
+  # Kill any existing session with the same name.
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+
   tmux new-session -d -s "$session_name" -x 200 -y 50
 
   local summary_pane="${session_name}:0.0"
