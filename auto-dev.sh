@@ -107,37 +107,25 @@ for pattern in "${CFG_WATCH_PATTERNS[@]}"; do
   WATCH_PATTERNS_STR="${WATCH_PATTERNS_STR} \"${pattern}\""
 done
 
-# --- Write agent runner wrapper (captures cost/token data via JSON output) ---
+# --- Write agent runner wrapper (streams output to pane, captures log for summary) ---
 AGENT_RUNNER="$MESSAGES_DIR/_run-claude.sh"
 cat > "$AGENT_RUNNER" << 'RUNEOF'
 #!/usr/bin/env bash
 prompt_file="$1"
-output_file="$2"
+log_file="$2"
 costs_file="$3"
 tokens_file="$4"
 tools="$5"
 repo_dir="$6"
 
 cd "$repo_dir"
-echo "Agent starting..."
 
-claude -p "$(cat "$prompt_file")" --allowedTools "$tools" --output-format json > "$output_file" 2>&1 || true
+claude -p "$(cat "$prompt_file")" --allowedTools "$tools" 2>&1 | tee "$log_file"
 
-if [ -f "$output_file" ] && command -v jq >/dev/null 2>&1; then
-  cost=$(jq -r '.total_cost_usd // .cost_usd // 0' "$output_file" 2>/dev/null || echo "0")
-  turns=$(jq -r '.num_turns // 0' "$output_file" 2>/dev/null || echo "0")
-  in_tok=$(jq -r '.usage.input_tokens // 0' "$output_file" 2>/dev/null || echo "0")
-  out_tok=$(jq -r '.usage.output_tokens // 0' "$output_file" 2>/dev/null || echo "0")
-  total_tok=$((in_tok + out_tok))
-  echo "$cost" >> "$costs_file"
-  echo "$total_tok" >> "$tokens_file"
-  echo ""
-  echo "Done. Cost: \$$cost | Tokens: $total_tok ($in_tok in / $out_tok out) | Turns: $turns"
-else
-  echo "0" >> "$costs_file"
-  echo "0" >> "$tokens_file"
-  echo "Done."
-fi
+char_count=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ' || echo "0")
+est_tokens=$((char_count / 4))
+echo "$est_tokens" >> "$tokens_file"
+echo "0" >> "$costs_file"
 RUNEOF
 chmod +x "$AGENT_RUNNER"
 
@@ -205,7 +193,7 @@ while true; do
     update_agent_status "\$MESSAGES_DIR" "dev-\$i" "implementing"
 
     send_to_pane "\$SESSION_NAME" "dev-\$i" \
-      "bash \$MESSAGES_DIR/_run-claude.sh \$prompt_file \$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.json \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Edit,Write,Read,Bash,Grep,Glob' \$REPO_DIR"
+      "bash \$MESSAGES_DIR/_run-claude.sh \$prompt_file \$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Edit,Write,Read,Bash,Grep,Glob' \$REPO_DIR"
   done
 
   echo ""
@@ -221,7 +209,7 @@ while true; do
   echo "  Dev agent(s) complete."
 
   for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
-    print_agent_summary "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.json" "dev-\$i output"
+    print_agent_summary "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log" "dev-\$i output"
   done
   echo ""
 
@@ -240,7 +228,7 @@ while true; do
   echo "\$reviewer_prompt" > "\$reviewer_prompt_file"
 
   send_to_pane "\$SESSION_NAME" "reviewer" \
-    "bash \$MESSAGES_DIR/_run-claude.sh \$reviewer_prompt_file \$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.json \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Read,Write,Edit,Bash,Grep,Glob' \$REPO_DIR"
+    "bash \$MESSAGES_DIR/_run-claude.sh \$reviewer_prompt_file \$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log 'Read,Write,Edit,Bash,Grep,Glob' \$REPO_DIR"
 
   echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
   REV_START=\$(date +%s)
@@ -255,7 +243,7 @@ while true; do
   VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
   update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
 
-  print_agent_summary "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.json" "reviewer output"
+  print_agent_summary "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log" "reviewer output"
   echo "  Verdict: \$VERDICT"
 
   if ! should_continue "\$VERDICT" "\$CURRENT_ROUND" "\$CFG_MAX_ROUNDS"; then
