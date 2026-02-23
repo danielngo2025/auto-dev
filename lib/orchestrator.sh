@@ -200,6 +200,39 @@ wait_or_abort() {
   return 1
 }
 
+# Extracts and prints a truncated summary from an agent's JSON output file.
+# Args: <json_file> <label> [max_lines]
+print_agent_summary() {
+  local json_file="$1"
+  local label="$2"
+  local max_lines="${3:-15}"
+
+  if [[ ! -f "$json_file" ]]; then
+    echo "  [$label] No output captured."
+    return
+  fi
+
+  local result
+  result="$(jq -r '.result // empty' "$json_file" 2>/dev/null)"
+
+  if [[ -z "$result" ]]; then
+    echo "  [$label] No result in output."
+    return
+  fi
+
+  local line_count
+  line_count="$(echo "$result" | wc -l | tr -d ' ')"
+
+  echo "  ┌─ $label ─────────────────────────────"
+  if (( line_count <= max_lines )); then
+    echo "$result" | sed 's/^/  │ /'
+  else
+    echo "$result" | head -n "$max_lines" | sed 's/^/  │ /'
+    echo "  │ ... ($((line_count - max_lines)) more lines)"
+  fi
+  echo "  └──────────────────────────────────────"
+}
+
 # Updates an agent's status in the agents object of summary.json.
 # Args: <messages_dir> <agent_name> <status>
 update_agent_status() {

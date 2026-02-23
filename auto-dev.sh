@@ -219,6 +219,10 @@ while true; do
   done
   echo ""
   echo "  Dev agent(s) complete."
+
+  for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
+    print_agent_summary "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.json" "dev-\$i output"
+  done
   echo ""
 
   update_summary_phase "\$MESSAGES_DIR" "review"
@@ -250,6 +254,8 @@ while true; do
 
   VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
   update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
+
+  print_agent_summary "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.json" "reviewer output"
   echo "  Verdict: \$VERDICT"
 
   if ! should_continue "\$VERDICT" "\$CURRENT_ROUND" "\$CFG_MAX_ROUNDS"; then
