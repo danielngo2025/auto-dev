@@ -12,7 +12,7 @@ teardown() {
 }
 
 @test "init_workflow creates summary.json" {
-  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" "auto-dev/feat" 3
+  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" 3
   [ -f "$MESSAGES_DIR/summary.json" ]
   local phase
   phase="$(jq -r '.phase' "$MESSAGES_DIR/summary.json")"
@@ -20,27 +20,25 @@ teardown() {
 }
 
 @test "init_workflow sets all fields correctly" {
-  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" "auto-dev/feat" 5
-  local spec branch round max_rounds
+  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" 5
+  local spec round max_rounds
   spec="$(jq -r '.spec' "$MESSAGES_DIR/summary.json")"
-  branch="$(jq -r '.branch' "$MESSAGES_DIR/summary.json")"
   round="$(jq -r '.round' "$MESSAGES_DIR/summary.json")"
   max_rounds="$(jq -r '.max_rounds' "$MESSAGES_DIR/summary.json")"
   [ "$spec" = "docs/specs/feat.md" ]
-  [ "$branch" = "auto-dev/feat" ]
   [ "$round" = "1" ]
   [ "$max_rounds" = "5" ]
 }
 
 @test "init_workflow initializes empty agents object" {
-  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" "auto-dev/feat" 3
+  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" 3
   local agents
   agents="$(jq -r '.agents | length' "$MESSAGES_DIR/summary.json")"
   [ "$agents" = "0" ]
 }
 
 @test "init_workflow initializes null review" {
-  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" "auto-dev/feat" 3
+  init_workflow "$MESSAGES_DIR" "docs/specs/feat.md" 3
   local review
   review="$(jq -r '.review' "$MESSAGES_DIR/summary.json")"
   [ "$review" = "null" ]

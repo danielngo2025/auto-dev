@@ -76,21 +76,28 @@ render_dashboard() {
     return 0
   fi
 
-  local spec branch round max_rounds phase
+  local spec round max_rounds phase
   spec="$(jq -r '.spec' "$summary_file")"
-  branch="$(jq -r '.branch' "$summary_file")"
   round="$(jq -r '.round' "$summary_file")"
   max_rounds="$(jq -r '.max_rounds' "$summary_file")"
   phase="$(jq -r '.phase' "$summary_file")"
 
   local feature_name
-  feature_name="$(basename "$branch")"
+  feature_name="$(basename "$spec" .md)"
+
+  # Chunk info (only present in chunked mode)
+  local chunk total_chunks chunk_title
+  chunk="$(jq -r '.chunk // empty' "$summary_file")"
+  total_chunks="$(jq -r '.total_chunks // empty' "$summary_file")"
+  chunk_title="$(jq -r '.chunk_title // empty' "$summary_file")"
 
   # Header
   _draw_top
   _draw_line "Feature: ${feature_name}"
   _draw_line "Spec:    ${spec}"
-  _draw_line "Branch:  ${branch}"
+  if [[ -n "$chunk" && -n "$total_chunks" ]]; then
+    _draw_line "Chunk:   ${chunk} / ${total_chunks} — ${chunk_title}"
+  fi
   _draw_line "Round:   ${round} / ${max_rounds}"
   _draw_line "Phase:   ${phase}"
 

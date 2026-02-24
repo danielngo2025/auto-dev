@@ -41,10 +41,10 @@ git clone <repo-url> ~/auto-dev
 bash ~/auto-dev/templates/init.sh /path/to/your/repo
 ```
 
-This creates a `.auto-dev/` directory in your repo with:
+This creates a `.specify/` directory in your repo with:
 
 ```
-.auto-dev/
+.specify/
 ├── config.yaml     # Workflow settings (edit this)
 ├── messages/       # Agent communication files (runtime)
 ├── prompts/        # Agent prompt templates
@@ -53,7 +53,7 @@ This creates a `.auto-dev/` directory in your repo with:
 
 ### 3. Configure
 
-Edit `.auto-dev/config.yaml` in your repo:
+Edit `.specify/config.yaml` in your repo:
 
 ```yaml
 project:
@@ -63,7 +63,7 @@ project:
 workflow:
   max_rounds: 3          # Max dev-review iterations
   dev_agents: 1           # Number of parallel dev agents
-  branch_prefix: "auto-dev/"
+
 
 spec:
   path: "docs/specs/"
@@ -145,7 +145,6 @@ Output:
 
 Project:      my-service
 Spec:         docs/specs/add-auth.md
-Branch:       auto-dev/add-auth
 Dev agents:   1
 Max rounds:   3
 App command:  go run ./cmd/server
@@ -182,10 +181,10 @@ Setup → Development → Review → Iteration → Finalize
 ```
 
 **Phase 1: Setup**
-- Reads `.auto-dev/config.yaml`
+- Reads `.specify/config.yaml`
 - Creates tmux session with panes
 - Starts the app runner
-- Creates feature branch
+
 
 **Phase 2: Development**
 - Dev agent reads the spec
@@ -211,7 +210,7 @@ Setup → Development → Review → Iteration → Finalize
 
 ### Agent Communication
 
-Agents communicate through shared files in `.auto-dev/messages/`:
+Agents communicate through shared files in `.specify/messages/`:
 
 | File | Written by | Read by |
 |------|-----------|---------|
@@ -230,7 +229,7 @@ The bottom tmux pane shows a live dashboard:
 ║  AUTO-DEV: add-auth                              ║
 ╠══════════════════════════════════════════════════╣
 ║  Spec:    docs/specs/add-auth.md                 ║
-║  Branch:  auto-dev/add-auth                      ║
+
 ║  Round:   2 / 3                                  ║
 ║  Phase:   iteration                              ║
 ╠══════════════════════════════════════════════════╣
@@ -264,7 +263,7 @@ reviewer:
     - "test-coverage"      # Test coverage verification
 ```
 
-These map to Claude Code skills or custom skills in `.auto-dev/skills/`.
+These map to Claude Code skills or custom skills in `.specify/skills/`.
 
 ### Severity Gate
 
@@ -325,7 +324,7 @@ Then use it in any Claude Code session:
 
 ## Customizing Prompt Templates
 
-Agent behavior is defined in `.auto-dev/prompts/`:
+Agent behavior is defined in `.specify/prompts/`:
 
 | File | Controls |
 |------|----------|
@@ -413,12 +412,12 @@ cd /your/repo && <your-app-command>
 
 ### Review never completes
 
-Check `.auto-dev/messages/reviewer-feedback.md` for the reviewer's output. The reviewer waits for all dev status files to show `"status": "done"` before starting.
+Check `.specify/messages/reviewer-feedback.md` for the reviewer's output. The reviewer waits for all dev status files to show `"status": "done"` before starting.
 
 ### Stale state from previous run
 
 Clear the messages directory:
 
 ```bash
-rm -rf .auto-dev/messages/*
+rm -rf .specify/messages/*
 ```

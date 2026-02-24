@@ -15,7 +15,7 @@ teardown() {
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "docs/specs/add-auth.md",
-  "branch": "auto-dev/add-auth",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {
@@ -38,7 +38,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "docs/specs/add-auth.md",
-  "branch": "auto-dev/add-auth",
+
   "round": 2,
   "max_rounds": 3,
   "agents": {
@@ -65,7 +65,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "test.md",
-  "branch": "auto-dev/test",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {},
@@ -91,7 +91,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "test.md",
-  "branch": "auto-dev/test",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {},
@@ -108,7 +108,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "test.md",
-  "branch": "auto-dev/test",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {
@@ -129,7 +129,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "test.md",
-  "branch": "auto-dev/test",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {
@@ -148,7 +148,7 @@ EOF
   cat > "$MESSAGES_DIR/summary.json" <<'EOF'
 {
   "spec": "test.md",
-  "branch": "auto-dev/test",
+
   "round": 1,
   "max_rounds": 3,
   "agents": {},

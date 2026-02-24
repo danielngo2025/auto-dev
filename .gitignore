@@ -1,4 +1,4 @@
 # Auto-dev runtime files
-.auto-dev/messages/
+.specify/messages/
 *.log
 .DS_Store

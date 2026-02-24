@@ -13,7 +13,7 @@ Launch the multi-terminal agentic dev workflow for the given spec.
 
 ## Steps
 
-1. Validate that `.auto-dev/config.yaml` exists in the current repo
+1. Validate that `.specify/config.yaml` exists in the current repo
 2. If not, run init to scaffold it:
 
 ```bash
@@ -26,11 +26,11 @@ bash <auto-dev-install-path>/templates/init.sh .
 bash <auto-dev-install-path>/auto-dev.sh --spec $ARGUMENTS.spec --repo .
 ```
 
-Where `<auto-dev-install-path>` is the directory where auto-dev is installed (check `~/.auto-dev-path` or use the absolute path).
+Where `<auto-dev-install-path>` is the directory where auto-dev is installed (check `~/.specify-path` or use the absolute path).
 
-## If `.auto-dev/` Does Not Exist
+## If `.specify/` Does Not Exist
 
-Run init first, then edit `.auto-dev/config.yaml` to configure:
+Run init first, then edit `.specify/config.yaml` to configure:
 - `app_runner.command` — the command to start your application
 - `reviewer.skills` — which review skills to run
 - `workflow.dev_agents` — how many dev agents to use

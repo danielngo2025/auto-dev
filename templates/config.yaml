@@ -1,4 +1,4 @@
-# .auto-dev/config.yaml — copy this to your repo's .auto-dev/ directory
+# .specify/config.yaml — copy this to your repo's .specify/ directory
 
 project:
   name: "my-project"
@@ -7,7 +7,17 @@ project:
 workflow:
   max_rounds: 3
   dev_agents: 1
-  branch_prefix: "auto-dev/"
+  dev_model: "sonnet"         # options: sonnet, opus, haiku
+  reviewer_model: "haiku"    # options: sonnet, opus, haiku
+  agent_timeout: 900         # max seconds per agent invocation (default: 900 = 15 min)
+  dev_fallback_model: "opus"      # retry with this model on timeout/empty output; empty = disabled
+  reviewer_fallback_model: ""     # retry with this model on timeout/empty output; empty = disabled
+  phases:
+    plan: true                # run planner agent (requires chunking.enabled or manual chunks)
+    dev: true                 # run dev agent(s)
+    review: true              # run reviewer (false = auto-approve, fast iteration)
+    commit: true              # git commit after completion
+    pr: true                  # prompt for push + PR creation at end
 
 spec:
   path: "docs/specs/"
@@ -26,6 +36,24 @@ reviewer:
     - "code-review"
   standards_file: "CLAUDE.md"
   severity_gate: "high"
+
+skip_specs: []                  # chunk filenames to skip, e.g. ["01-setup.md", "02-models.md"]
+
+chunking:
+  enabled: false              # set to true to decompose large specs into smaller chunks
+  max_chunks: 5               # maximum chunks the planner can create
+  planner_model: "sonnet"     # model for the planner agent
+  planner_timeout: 600        # max seconds for planner agent (default: 10 min)
+
+permissions:
+  dev_tools: "Edit,Write,Read,Bash,Grep,Glob"
+  reviewer_tools: "Read,Write,Bash,Grep,Glob"       # no Edit — reviewer only writes feedback
+  planner_tools: "Read,Write,Bash,Grep,Glob"
+
+context_compaction:
+  enabled: false         # opt-in: runs haiku after each round to summarize agent output
+  model: "haiku"         # model for summarization (haiku is cheap/fast)
+  max_log_chars: 50000   # chars of log to feed the summarizer (avoids huge prompts)
 
 summary:
   refresh_interval: 5

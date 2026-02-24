@@ -20,7 +20,7 @@ echo "https://github.com/test/repo/pull/1"
 MOCK
   chmod +x "$TEST_DIR/bin/gh"
 
-  # Set up a fake repo with .auto-dev
+  # Set up a fake repo with .specify
   mkdir -p "$TEST_DIR/repo"
   cd "$TEST_DIR/repo"
   git init --quiet
@@ -28,8 +28,8 @@ MOCK
 
   export OLDPWD_SAVE="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   bash "$OLDPWD_SAVE/templates/init.sh" "$TEST_DIR/repo"
-  yq -i '.app_runner.command = ""' "$TEST_DIR/repo/.auto-dev/config.yaml"
-  yq -i '.project.name = "integration-test"' "$TEST_DIR/repo/.auto-dev/config.yaml"
+  yq -i '.app_runner.command = ""' "$TEST_DIR/repo/.specify/config.yaml"
+  yq -i '.project.name = "integration-test"' "$TEST_DIR/repo/.specify/config.yaml"
 
   echo "# Add user login" > "$TEST_DIR/repo/spec.md"
 }
@@ -48,10 +48,9 @@ teardown() {
   [[ "$output" == *"Dry run"* ]]
 }
 
-@test "dry-run shows correct spec and branch" {
+@test "dry-run shows correct spec" {
   run bash "$OLDPWD_SAVE/auto-dev.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
   [[ "$output" == *"spec.md"* ]]
-  [[ "$output" == *"auto-dev/"* ]]
 }
 
 @test "dry-run shows review skills from config" {
@@ -59,13 +58,13 @@ teardown() {
   [[ "$output" == *"code-review"* ]]
 }
 
-@test "init creates complete .auto-dev structure" {
+@test "init creates complete .specify structure" {
   # Verify the init from setup created everything
-  [ -f "$TEST_DIR/repo/.auto-dev/config.yaml" ]
-  [ -d "$TEST_DIR/repo/.auto-dev/messages" ]
-  [ -d "$TEST_DIR/repo/.auto-dev/prompts" ]
-  [ -d "$TEST_DIR/repo/.auto-dev/skills" ]
-  [ -f "$TEST_DIR/repo/.auto-dev/prompts/dev-agent.md" ]
-  [ -f "$TEST_DIR/repo/.auto-dev/prompts/reviewer-agent.md" ]
-  [ -f "$TEST_DIR/repo/.auto-dev/prompts/orchestrator.md" ]
+  [ -f "$TEST_DIR/repo/.specify/config.yaml" ]
+  [ -d "$TEST_DIR/repo/.specify/messages" ]
+  [ -d "$TEST_DIR/repo/.specify/prompts" ]
+  [ -d "$TEST_DIR/repo/.specify/skills" ]
+  [ -f "$TEST_DIR/repo/.specify/prompts/dev-agent.md" ]
+  [ -f "$TEST_DIR/repo/.specify/prompts/reviewer-agent.md" ]
+  [ -f "$TEST_DIR/repo/.specify/prompts/orchestrator.md" ]
 }

@@ -10,16 +10,13 @@ set -euo pipefail
 init_workflow() {
   local messages_dir="$1"
   local spec_path="$2"
-  local branch_name="$3"
-  local max_rounds="$4"
+  local max_rounds="$3"
 
   jq -n \
     --arg spec "$spec_path" \
-    --arg branch "$branch_name" \
     --argjson max_rounds "$max_rounds" \
     '{
       spec: $spec,
-      branch: $branch,
       round: 1,
       max_rounds: $max_rounds,
       phase: "setup",
@@ -180,22 +177,35 @@ show_progress() {
 }
 
 # Waits for a keypress or timeout. Returns 0 if user pressed ESC or 'q' (abort).
+# Loops until the full timeout elapses to avoid rapid polling when non-abort keys arrive.
 # Args: <timeout_seconds>
 wait_or_abort() {
   local timeout="$1"
-  local key=""
-  if read -rsn1 -t "$timeout" key 2>/dev/null; then
-    if [[ "$key" == "q" || "$key" == "Q" ]]; then
-      return 0
+  local deadline=$(( $(date +%s) + timeout ))
+
+  while true; do
+    local remaining=$(( deadline - $(date +%s) ))
+    if (( remaining <= 0 )); then
+      return 1
     fi
-    if [[ "$key" == $'\e' ]]; then
-      local seq=""
-      if ! read -rsn1 -t 0.05 seq 2>/dev/null; then
+
+    local key=""
+    if read -rsn1 -t "$remaining" key 2>/dev/null; then
+      if [[ "$key" == "q" || "$key" == "Q" ]]; then
         return 0
       fi
+      if [[ "$key" == $'\e' ]]; then
+        local seq=""
+        if ! read -rsn1 -t 0.05 seq 2>/dev/null; then
+          return 0
+        fi
+      fi
+      # Non-abort key — continue waiting for remaining time
+    else
+      # Timeout expired
+      return 1
     fi
-  fi
-  return 1
+  done
 }
 
 # Prints the last N lines from an agent's text log file.
@@ -226,6 +236,26 @@ print_agent_summary() {
     echo "  │ ... (showing last $max_lines of $line_count lines)"
   fi
   echo "  └──────────────────────────────────────"
+}
+
+# Updates chunk tracking fields in summary.json.
+# Args: <messages_dir> <current_chunk> <total_chunks> <chunk_title>
+update_summary_chunk() {
+  local messages_dir="$1"
+  local current_chunk="$2"
+  local total_chunks="$3"
+  local chunk_title="$4"
+  local summary_file="${messages_dir}/summary.json"
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  jq --argjson current "$current_chunk" \
+     --argjson total "$total_chunks" \
+     --arg title "$chunk_title" \
+     '.chunk = $current | .total_chunks = $total | .chunk_title = $title | .round = 1' \
+     "$summary_file" > "$tmp_file"
+  mv "$tmp_file" "$summary_file"
 }
 
 # Updates an agent's status in the agents object of summary.json.

@@ -37,9 +37,6 @@
   run yq '.workflow.dev_agents' templates/config.yaml
   [ "$output" = "1" ]
 
-  run yq '.workflow.branch_prefix' templates/config.yaml
-  [ "$output" = "auto-dev/" ]
-
   run yq '.summary.refresh_interval' templates/config.yaml
   [ "$output" = "5" ]
 }

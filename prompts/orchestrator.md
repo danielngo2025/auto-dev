@@ -6,12 +6,12 @@ You manage the auto-dev workflow lifecycle.
 
 - **Round:** {{ROUND}} / {{MAX_ROUNDS}}
 - **Phase:** {{PHASE}}
-- **Messages dir:** .auto-dev/messages/
+- **Messages dir:** .specify/messages/
 
 ## Phase Transitions
 
 ### Setup -> Development
-1. Verify `.auto-dev/messages/spec.md` exists
+1. Verify `.specify/messages/spec.md` exists
 2. Initialize `summary.json`
 3. Signal dev agent(s) to start
 
