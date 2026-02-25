@@ -347,21 +347,52 @@ VERDICT=""
 DEV_PIDS=()
 REVIEWER_PID=""
 
-# Cleanup on abort
-abort_workflow() {
-  echo ""
-  echo "  Aborted by user. Cleaning up..."
-  update_summary_phase "\$MESSAGES_DIR" "aborted"
+kill_agent_pids() {
   for pid in "\${DEV_PIDS[@]:-}"; do
     kill "\$pid" 2>/dev/null || true
   done
   [[ -n "\${REVIEWER_PID:-}" ]] && kill "\$REVIEWER_PID" 2>/dev/null || true
+}
+
+abort_workflow() {
+  echo ""
+  echo "  Aborted by user. Cleaning up..."
+  update_summary_phase "\$MESSAGES_DIR" "aborted"
+  kill_agent_pids
   [[ -n "\${APP_RUNNER_PID:-}" ]] && kill "\$APP_RUNNER_PID" 2>/dev/null || true
   exit 1
 }
 trap abort_workflow INT TERM
 
-echo "  Press Ctrl+C to abort."
+# Waits for a condition while showing elapsed timer. ESC kills active agents.
+# Args: <label> <check_command>
+# check_command is eval'd each tick; return 0 = done, 1 = keep waiting.
+wait_with_timer() {
+  local label="\$1"
+  local check_cmd="\$2"
+  local start_time=\$SECONDS
+
+  while ! eval "\$check_cmd"; do
+    local elapsed=\$(( SECONDS - start_time ))
+    local mins=\$(( elapsed / 60 ))
+    local secs=\$(( elapsed % 60 ))
+    printf "\r  %s — %dm %02ds (ESC to abort agent)  " "\$label" "\$mins" "\$secs"
+
+    # Check for ESC key (non-blocking read from /dev/tty)
+    if read -rsn1 -t 2 key </dev/tty 2>/dev/null; then
+      if [[ "\$key" == \$'\x1b' ]]; then
+        echo ""
+        abort_workflow
+      fi
+    fi
+  done
+  local elapsed=\$(( SECONDS - start_time ))
+  local mins=\$(( elapsed / 60 ))
+  local secs=\$(( elapsed % 60 ))
+  printf "\r  %s — done in %dm %02ds              \n" "\$label" "\$mins" "\$secs"
+}
+
+echo "  Press ESC or Ctrl+C to abort."
 echo ""
 
 # ============================================================
@@ -530,10 +561,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       open_tab "spex: dev-\$i" "tail -F '\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log'"
     done
 
-    echo "  Waiting for \$CFG_DEV_AGENTS dev agent(s)..."
-    while ! check_dev_status "\$MESSAGES_DIR" "\$CFG_DEV_AGENTS"; do
-      sleep 5
-    done
+    wait_with_timer "Dev agent(s) working" "check_dev_status '\$MESSAGES_DIR' '\$CFG_DEV_AGENTS'"
 
     for pid in "\${DEV_PIDS[@]}"; do
       wait "\$pid" 2>/dev/null || true
@@ -543,8 +571,8 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       update_agent_status "\$MESSAGES_DIR" "dev-\$i" "done"
     done
 
-    echo ""
-    echo "  Dev agent(s) complete."
+    RUNNING_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
+    echo "  Dev complete. Tokens so far: \$RUNNING_TOKENS"
 
     for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
       print_agent_summary "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log" "dev-\$i output"
@@ -600,23 +628,17 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       REVIEWER_PID=\$!
       open_tab "spex: reviewer" "tail -F '\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log'"
 
-      echo "  Waiting for reviewer..."
-      while [[ "\$(get_review_verdict "\$MESSAGES_DIR")" = "pending" ]]; do
-        if ! kill -0 "\$REVIEWER_PID" 2>/dev/null; then
-          echo "  Reviewer process exited."
-          break
-        fi
-        sleep 5
-      done
-      wait "\$REVIEWER_PID" 2>/dev/null || true
+      wait_with_timer "Reviewer working" '[[ "\$(get_review_verdict "\$MESSAGES_DIR")" != "pending" ]] || ! kill -0 "\$REVIEWER_PID" 2>/dev/null'
 
-      echo ""
+      wait "\$REVIEWER_PID" 2>/dev/null || true
 
       VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
       update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
 
+      RUNNING_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
+      echo "  Verdict: \$VERDICT | Tokens so far: \$RUNNING_TOKENS"
+
       print_agent_summary "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log" "reviewer output"
-      echo "  Verdict: \$VERDICT"
 
       if [[ "\$CFG_COMPACTION_ENABLED" = "true" ]]; then
         _log="\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log"

@@ -1,11 +1,16 @@
 # spex
 
-Agentic AI workflow that orchestrates Claude CLI agents to implement features from markdown specs. A dev agent implements, a reviewer agent enforces coding standards, and the dev agent iterates on feedback — all running inline in your terminal.
+Agentic AI workflow that orchestrates Claude CLI agents to implement features from markdown specs. Dev and reviewer agents run in parallel terminal tabs with live-streaming output, elapsed timers, and token tracking.
 
 ```
 Spec (.md) → Dev Agent → Review Agent → Iterate → Commit → PR
                  ↑             │
                  └─────────────┘  (up to max_rounds)
+
+Main tab:  orchestrator (timer, status, ESC to abort)
+Tab 2:     dev agent (live streaming output)
+Tab 3:     reviewer (live streaming output)
+Tab 4:     app runner (background process logs)
 ```
 
 ## Prerequisites
@@ -33,6 +38,12 @@ git clone <repo-url> ~/spex
 
 ```bash
 bash ~/spex/init.sh /path/to/your/repo
+```
+
+To include skills from a remote repo:
+
+```bash
+bash ~/spex/init.sh --skills-repo vendasta/dev-agent-toolkit /path/to/your/repo
 ```
 
 This creates a `.specify/` directory in your repo with:
@@ -143,12 +154,17 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 
 ### Workflow Phases
 
-1. **Setup** — Reads config, starts app runner in background
+1. **Setup** — Reads config, starts app runner in a new terminal tab
 2. **Planning** (optional) — Planner agent decomposes spec into chunks
-3. **Development** — Dev agent implements the feature, runs tests
-4. **Review** — Reviewer agent checks code against standards, gives verdict
+3. **Development** — Dev agent(s) run in parallel, each in its own terminal tab with live output. Main tab shows elapsed timer.
+4. **Review** — Reviewer runs in its own tab. Main tab polls for verdict with timer.
 5. **Iteration** — If `changes_requested` and under `max_rounds`: dev fixes issues
-6. **Finalize** — Prompts for approval, commits changes, creates PR
+6. **Finalize** — Shows total tokens consumed. Prompts for approval, commits, creates PR.
+
+### Controls
+
+- **ESC** — Abort the current agent (dev or reviewer) during its run
+- **Ctrl+C** — Abort the entire workflow
 
 ### Agent Communication
 

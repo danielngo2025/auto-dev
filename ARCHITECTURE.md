@@ -2,29 +2,27 @@
 
 ## Overview
 
-Spex is a bash-based orchestrator that coordinates Claude CLI agents to implement features from markdown specs. It runs entirely in the user's terminal — no tmux, no background daemons — using file-based coordination between agents.
+Spex is a bash-based orchestrator that coordinates Claude CLI agents to implement features from markdown specs. Agents run as background processes in separate terminal tabs with live-streaming output. The orchestrator stays in the main tab, showing elapsed timers and polling for completion.
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                     spex.sh                          │
-│  (argument parsing, config loading, setup)           │
-├──────────────────────────────────────────────────────┤
-│                 _orchestrator.sh                      │
-│  (generated heredoc script with baked-in config)     │
-│                                                      │
-│  ┌─────────┐   ┌──────────┐   ┌──────────────────┐  │
-│  │Planner  │──>│Dev Agent │──>│Reviewer Agent    │  │
-│  │(optional)│  │(blocking)│   │(blocking)        │  │
-│  └─────────┘   └──────────┘   └──────────────────┘  │
-│       │              │               │               │
-│       ▼              ▼               ▼               │
-│  ┌──────────────────────────────────────────────┐    │
-│  │          .specify/messages/                   │    │
-│  │  (file-based agent coordination protocol)     │    │
-│  └──────────────────────────────────────────────┘    │
-├──────────────────────────────────────────────────────┤
-│              App Runner (background PID)              │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Main Tab: spex.sh → _orchestrator.sh                   │
+│  (timer, status polling, ESC to abort, token tracking)  │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  Tab: App Runner ─────── tail -F app-output.log         │
+│  Tab: Dev Agent 1 ────── tail -F dev-1-r1.log           │
+│  Tab: Dev Agent N ────── tail -F dev-N-r1.log           │
+│  Tab: Reviewer ────────── tail -F reviewer-r1.log       │
+│                                                         │
+│  Agents run as background processes (script -qF + PTY)  │
+│  writing to log files. Tabs show live output via tail.   │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │          .specify/messages/                       │   │
+│  │  (file-based agent coordination protocol)         │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -37,7 +35,8 @@ spex/
 │   ├── config-parser.sh    # YAML config → shell variables
 │   ├── orchestrator.sh     # Workflow state management
 │   ├── prompt-renderer.sh  # {{PLACEHOLDER}} substitution
-│   └── summary-watcher.sh  # TUI dashboard renderer
+│   ├── summary-watcher.sh  # TUI dashboard renderer
+│   └── terminal.sh         # Terminal tab management (macOS)
 ├── prompts/
 │   ├── dev-agent.md        # Dev agent system prompt template
 │   ├── reviewer-agent.md   # Reviewer system prompt template
@@ -68,8 +67,8 @@ The entry point handles:
 - Skip-spec filtering
 - Writing the `_run-claude.sh` agent wrapper
 - Generating `_orchestrator.sh` as a heredoc with baked-in config values
-- Starting the app runner as a background process
-- Running the orchestrator inline (blocking)
+- Starting the app runner as a background process with terminal tab
+- Running the orchestrator inline (blocking) in the main tab
 
 ### 2. Orchestrator (`_orchestrator.sh`)
 
@@ -85,14 +84,17 @@ Generated at runtime via heredoc. All config values are baked in at write time (
 
 **Dev/review loop** (inner, per chunk):
 1. Render dev prompt with current context
-2. Run dev agent(s) sequentially as blocking subprocesses
-3. Optionally compact dev logs (context compaction)
-4. Render reviewer prompt, run reviewer as blocking subprocess
-5. Read verdict from `reviewer-feedback.md`
-6. If `changes_requested` and under `max_rounds`: commit WIP, build `prior-context.md`, loop
-7. If `approved` or at `max_rounds`: break
+2. Launch dev agent(s) as background processes, each in a new terminal tab
+3. Poll `check_dev_status` with elapsed timer; ESC aborts agents
+4. Optionally compact dev logs (context compaction)
+5. Launch reviewer as background process in a new terminal tab
+6. Poll `get_review_verdict` with elapsed timer; ESC aborts reviewer
+7. Display token usage after each phase
+8. If `changes_requested` and under `max_rounds`: commit WIP, build `prior-context.md`, loop
+9. If `approved` or at `max_rounds`: break
 
 **Finalization**:
+- Displays total tokens consumed
 - Prompts user for approval (y/d/n)
 - Commits, creates PR via `gh pr create`
 
@@ -102,11 +104,15 @@ Wrapper around `claude -p` that handles:
 - Tool permissions (`--allowedTools`)
 - Model selection (`--model`)
 - Timeout enforcement (`timeout Ns`)
-- Output logging (`tee` to log file)
+- PTY allocation via `script -qF` for real-time streaming output
 - Retry with fallback model on timeout or empty output
 - Token/cost estimation logging
 
-### 4. File-Based Coordination
+### 4. Terminal Tab Management (`lib/terminal.sh`)
+
+Opens new terminal tabs on macOS for each agent process. Detects iTerm2 vs Terminal.app via `$TERM_PROGRAM` and uses `osascript`. Each tab runs `tail -F` on the agent's log file for live output. No-ops on non-macOS platforms.
+
+### 5. File-Based Coordination
 
 Agents don't communicate directly. All coordination happens through files in `.specify/messages/`:
 
@@ -186,14 +192,20 @@ Renders a TUI dashboard from `summary.json`. Used for monitoring workflow state.
 
 ## Design Decisions
 
-**Blocking subprocesses over parallel panes**: Agents run sequentially as blocking bash subprocesses. Output streams directly to the terminal. This is simpler than parallel execution and produces clean, readable output.
+**Background agents with terminal tabs**: Agents run as background processes writing to log files. Each agent gets a dedicated terminal tab running `tail -F` for live output. The orchestrator polls status files and shows an elapsed timer.
+
+**PTY allocation via `script -qF`**: Claude CLI buffers output when not connected to a terminal. Using `script -qF` allocates a pseudo-TTY so output streams in real-time to log files, enabling live `tail -F` visibility.
+
+**ESC to abort current agent**: During polling loops, the orchestrator reads keystrokes from `/dev/tty`. ESC kills the active agent PIDs without aborting the entire workflow.
 
 **Heredoc-generated orchestrator**: The orchestrator script is generated as a heredoc with config values baked in. This avoids re-reading config at runtime and ensures the orchestrator is self-contained.
 
-**File-based coordination**: Agents write status/feedback files. The orchestrator reads them after blocking agent calls complete. No polling loops needed since agents run synchronously.
+**File-based coordination**: Agents write status/feedback files (`dev-N-status.json`, `reviewer-feedback.md`). The orchestrator polls these during the timer loop to detect completion.
 
-**Ctrl+C abort**: INT/TERM trap cleans up the app runner background process and updates summary phase to "aborted".
+**Ctrl+C abort**: INT/TERM trap cleans up all tracked PIDs (dev agents, reviewer, app runner) and updates summary phase to "aborted".
 
 **Context passing between rounds**: After each dev/review round, the orchestrator builds `prior-context.md` summarizing what happened (files modified, review feedback, compacted summaries). The next round's dev prompt includes this context.
 
 **Retry with fallback**: If a primary model times out or produces no output, the agent runner automatically retries with a configured fallback model (e.g., sonnet → opus).
+
+**Token tracking**: Each agent runner estimates tokens from output size and appends to `tokens.log`. The orchestrator displays cumulative tokens after each phase and at finalization.
