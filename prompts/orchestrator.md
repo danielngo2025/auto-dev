@@ -1,6 +1,6 @@
 # Role: Orchestrator
 
-You manage the auto-dev workflow lifecycle.
+You manage the spex workflow lifecycle.
 
 ## State
 

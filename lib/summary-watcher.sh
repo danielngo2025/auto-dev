@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Renders a TUI dashboard from summary.json written by auto-dev agents.
+# Renders a TUI dashboard from summary.json written by spex agents.
 # Usage: source lib/summary-watcher.sh
 
 set -euo pipefail

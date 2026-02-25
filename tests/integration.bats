@@ -27,7 +27,7 @@ MOCK
   git commit --allow-empty -m "init" --quiet
 
   export OLDPWD_SAVE="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-  bash "$OLDPWD_SAVE/templates/init.sh" "$TEST_DIR/repo"
+  bash "$OLDPWD_SAVE/init.sh" "$TEST_DIR/repo"
   yq -i '.app_runner.command = ""' "$TEST_DIR/repo/.specify/config.yaml"
   yq -i '.project.name = "integration-test"' "$TEST_DIR/repo/.specify/config.yaml"
 
@@ -36,25 +36,24 @@ MOCK
 
 teardown() {
   export PATH="$ORIGINAL_PATH"
-  tmux kill-session -t "auto-dev-integration-test" 2>/dev/null || true
   cd /
   rm -rf "$TEST_DIR"
 }
 
 @test "dry-run succeeds with valid config" {
-  run bash "$OLDPWD_SAVE/auto-dev.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
+  run bash "$OLDPWD_SAVE/spex.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"integration-test"* ]]
   [[ "$output" == *"Dry run"* ]]
 }
 
 @test "dry-run shows correct spec" {
-  run bash "$OLDPWD_SAVE/auto-dev.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
+  run bash "$OLDPWD_SAVE/spex.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
   [[ "$output" == *"spec.md"* ]]
 }
 
 @test "dry-run shows review skills from config" {
-  run bash "$OLDPWD_SAVE/auto-dev.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
+  run bash "$OLDPWD_SAVE/spex.sh" --spec "$TEST_DIR/repo/spec.md" --repo "$TEST_DIR/repo" --dry-run
   [[ "$output" == *"code-review"* ]]
 }
 

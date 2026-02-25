@@ -1,15 +1,15 @@
 ---
-name: auto-dev
-description: Launch the auto-dev multi-terminal agentic workflow for a spec file
+name: spex
+description: Launch the spex agentic workflow for a spec file
 arguments:
   - name: spec
     description: Path to the feature spec markdown file
     required: true
 ---
 
-# Auto-Dev Workflow
+# Spex Workflow
 
-Launch the multi-terminal agentic dev workflow for the given spec.
+Launch the agentic dev workflow for the given spec.
 
 ## Steps
 
@@ -17,16 +17,16 @@ Launch the multi-terminal agentic dev workflow for the given spec.
 2. If not, run init to scaffold it:
 
 ```bash
-bash <auto-dev-install-path>/templates/init.sh .
+bash <spex-install-path>/init.sh .
 ```
 
 3. Run the launcher:
 
 ```bash
-bash <auto-dev-install-path>/auto-dev.sh --spec $ARGUMENTS.spec --repo .
+bash <spex-install-path>/spex.sh --spec $ARGUMENTS.spec --repo .
 ```
 
-Where `<auto-dev-install-path>` is the directory where auto-dev is installed (check `~/.specify-path` or use the absolute path).
+Where `<spex-install-path>` is the directory where spex is installed (check `~/.specify-path` or use the absolute path).
 
 ## If `.specify/` Does Not Exist
 
@@ -38,10 +38,10 @@ Run init first, then edit `.specify/config.yaml` to configure:
 
 ## After Launch
 
-The workflow runs in tmux. You can:
-- `tmux attach -t auto-dev-<project>` to view the session
-- Watch the summary dashboard in the bottom pane
-- Each agent works in its own visible pane
+The workflow runs inline in your terminal. You can:
+- Watch agents work in real time as output streams to your terminal
+- Press Ctrl+C to abort the workflow
+- Review agent logs in `.specify/messages/`
 
 ## Workflow
 

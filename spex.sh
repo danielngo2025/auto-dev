@@ -4,19 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/config-parser.sh"
-source "$SCRIPT_DIR/lib/tmux-setup.sh"
 source "$SCRIPT_DIR/lib/orchestrator.sh"
 source "$SCRIPT_DIR/lib/prompt-renderer.sh"
 source "$SCRIPT_DIR/lib/summary-watcher.sh"
+source "$SCRIPT_DIR/lib/terminal.sh"
 
 # --- Argument parsing ---
 SPEC_FILE=""
 REPO_DIR="."
 DRY_RUN=false
-DETACHED=false
 
 usage() {
-  echo "Usage: auto-dev.sh [--spec <spec.md>] --repo <path> [--dry-run] [--detached]"
+  echo "Usage: spex.sh [--spec <spec.md>] --repo <path> [--dry-run]"
   echo ""
   echo "Options:"
   echo "  --spec <file>    Path to the feature spec (default: first .md in .specify/specs/)"
@@ -24,7 +23,6 @@ usage() {
   echo "Chunk files in .specify/specs/chunks/ are picked up automatically."
   echo "  --repo <path>    Path to the target repository (default: .)"
   echo "  --dry-run        Show the execution plan without running"
-  echo "  --detached       Run tmux session in detached mode (for CI)"
   exit 1
 }
 
@@ -33,7 +31,6 @@ while [[ $# -gt 0 ]]; do
     --spec) SPEC_FILE="$2"; shift 2 ;;
     --repo) REPO_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
-    --detached) DETACHED=true; shift ;;
     --help|-h) usage ;;
     *) usage ;;
   esac
@@ -115,8 +112,6 @@ if [[ "$MANUAL_CHUNKS" = "true" ]]; then
 else
   FEATURE_NAME="$(basename "$SPEC_FILE" .md)"
 fi
-SESSION_NAME="auto-dev-${CFG_PROJECT_NAME}"
-
 # --- Dry run ---
 if [[ "$DRY_RUN" = true ]]; then
   echo "=== Dry run: Auto-Dev Execution Plan ==="
@@ -154,8 +149,6 @@ if [[ "$DRY_RUN" = true ]]; then
   else
     echo "Chunking:       disabled"
   fi
-  echo ""
-  echo "Panes: summary | app-runner | reviewer | dev-1..dev-${CFG_DEV_AGENTS}"
   echo ""
   echo "Dry run complete. Remove --dry-run to execute."
   exit 0
@@ -199,18 +192,17 @@ else
   fi
 fi
 init_workflow "$MESSAGES_DIR" "$SPEC_FILE" "$CFG_MAX_ROUNDS"
-create_session "$SESSION_NAME" "$CFG_DEV_AGENTS"
 
-# Unset CLAUDECODE in all panes so nested claude sessions can launch
-for pane_target in $(tmux list-panes -t "$SESSION_NAME" -a -F '#{pane_id}'); do
-  tmux send-keys -t "$pane_target" "unset CLAUDECODE" C-m
-done
-sleep 1
+# Unset CLAUDECODE so nested claude sessions can launch
+unset CLAUDECODE
 
-# Start app runner
+# Start app runner in background
+APP_RUNNER_PID=""
 if [[ -n "$CFG_APP_COMMAND" ]]; then
-  send_to_pane "$SESSION_NAME" "app-runner" \
-    "cd $REPO_DIR && $CFG_APP_COMMAND 2>&1 | tee $MESSAGES_DIR/app-output.log"
+  bash -c "cd '$REPO_DIR' && $CFG_APP_COMMAND" < /dev/null > "$MESSAGES_DIR/app-output.log" 2>&1 &
+  APP_RUNNER_PID=$!
+  echo "  App runner started (PID: $APP_RUNNER_PID)"
+  open_tab "spex: app" "tail -F '$MESSAGES_DIR/app-output.log'"
 fi
 
 # Build skills list and watch patterns strings for prompt rendering
@@ -263,13 +255,13 @@ fi
 echo "$(date): starting claude -p (model=${model:-default}, timeout=${agent_timeout}s, tools=$tools)" >> "$debug_log"
 echo "$(date): prompt_file=$prompt_file ($(wc -c < "$prompt_file" | tr -d ' ') bytes)" >> "$debug_log"
 
-prompt_content="$(cat "$prompt_file")"
-timeout "${agent_timeout}s" claude -p "$prompt_content" \
+# Use script -qF to allocate a pseudo-TTY so claude streams output in real-time
+script -qF "$log_file" timeout "${agent_timeout}s" claude -p "$(cat "$prompt_file")" \
   --allowedTools "$tools" \
   --permission-mode acceptEdits \
   --no-session-persistence \
-  "${model_args[@]}" 2>&1 | tee "$log_file"
-exit_code=${PIPESTATUS[0]}
+  "${model_args[@]}" < /dev/null
+exit_code=$?
 
 echo "$(date): claude exited with code $exit_code" >> "$debug_log"
 
@@ -283,13 +275,12 @@ if [[ ($exit_code -eq 124 || ! -s "$log_file") && -n "$fallback_model" && "$fall
   echo "$(date): retrying with fallback model: $fallback_model" >> "$debug_log"
   echo "" >> "$log_file"
   echo "--- Retrying with fallback model: $fallback_model ---" >> "$log_file"
-  prompt_content="$(cat "$prompt_file")"
-  timeout "${agent_timeout}s" claude -p "$prompt_content" \
+  script -qaF "$log_file" timeout "${agent_timeout}s" claude -p "$(cat "$prompt_file")" \
     --allowedTools "$tools" \
     --permission-mode acceptEdits \
     --no-session-persistence \
-    --model "$fallback_model" 2>&1 | tee -a "$log_file"
-  exit_code=${PIPESTATUS[0]}
+    --model "$fallback_model" < /dev/null
+  exit_code=$?
   echo "$(date): fallback exited with code $exit_code" >> "$debug_log"
   if [[ $exit_code -eq 124 ]]; then
     echo "" >> "$log_file"
@@ -304,7 +295,7 @@ echo "0" >> "$costs_file"
 RUNEOF
 chmod +x "$AGENT_RUNNER"
 
-# --- Write orchestrator script to run inside tmux ---
+# --- Write orchestrator script ---
 ORCHESTRATOR_SCRIPT="$MESSAGES_DIR/_orchestrator.sh"
 cat > "$ORCHESTRATOR_SCRIPT" << ORCHEOF
 #!/usr/bin/env bash
@@ -313,12 +304,11 @@ set -euo pipefail
 SCRIPT_DIR="$SCRIPT_DIR"
 source "\$SCRIPT_DIR/lib/orchestrator.sh"
 source "\$SCRIPT_DIR/lib/prompt-renderer.sh"
-source "\$SCRIPT_DIR/lib/tmux-setup.sh"
+source "\$SCRIPT_DIR/lib/terminal.sh"
 
 MESSAGES_DIR="$MESSAGES_DIR"
 PROMPTS_DIR="$PROMPTS_DIR"
 REPO_DIR="$REPO_DIR"
-SESSION_NAME="$SESSION_NAME"
 FEATURE_NAME="$FEATURE_NAME"
 SPEC_FILE="$SPEC_FILE"
 CFG_DEV_AGENTS=$CFG_DEV_AGENTS
@@ -348,32 +338,30 @@ CFG_PLANNER_TIMEOUT="$CFG_PLANNER_TIMEOUT"
 MANUAL_CHUNKS="$MANUAL_CHUNKS"
 SKILLS_LIST="$SKILLS_LIST"
 WATCH_PATTERNS_STR="$WATCH_PATTERNS_STR"
-
-# Rebuild PANE_MAP
-declare -gA PANE_MAP=()
-PANE_MAP["summary"]="\${SESSION_NAME}:0.0"
-PANE_MAP["app-runner"]="\${SESSION_NAME}:0.1"
-PANE_MAP["reviewer"]="\${SESSION_NAME}:0.2"
-for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
-  PANE_MAP["dev-\${i}"]="\${SESSION_NAME}:0.\$((i + 2))"
-done
+APP_RUNNER_PID="$APP_RUNNER_PID"
 
 CURRENT_ROUND=1
 TOTAL_CHUNKS=1
 CURRENT_CHUNK=0
 VERDICT=""
+DEV_PIDS=()
+REVIEWER_PID=""
 
 # Cleanup on abort
 abort_workflow() {
   echo ""
   echo "  Aborted by user. Cleaning up..."
   update_summary_phase "\$MESSAGES_DIR" "aborted"
-  kill_session "\$SESSION_NAME" 2>/dev/null || true
+  for pid in "\${DEV_PIDS[@]:-}"; do
+    kill "\$pid" 2>/dev/null || true
+  done
+  [[ -n "\${REVIEWER_PID:-}" ]] && kill "\$REVIEWER_PID" 2>/dev/null || true
+  [[ -n "\${APP_RUNNER_PID:-}" ]] && kill "\$APP_RUNNER_PID" 2>/dev/null || true
   exit 1
 }
 trap abort_workflow INT TERM
 
-echo "  Press ESC or 'q' to abort workflow."
+echo "  Press Ctrl+C to abort."
 echo ""
 
 # ============================================================
@@ -406,19 +394,13 @@ if [[ "\$CFG_CHUNKING_ENABLED" = "true" ]]; then
 
     update_agent_status "\$MESSAGES_DIR" "planner" "planning"
 
-    send_to_pane "\$SESSION_NAME" "dev-1" \
-      "bash \$MESSAGES_DIR/_run-claude.sh \$planner_prompt_file \$MESSAGES_DIR/planner.log \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log '\$CFG_PLANNER_TOOLS' \$REPO_DIR \$CFG_PLANNER_MODEL \$CFG_PLANNER_TIMEOUT"
-
     echo ""
     echo "=== Planning Phase — Decomposing spec into chunks ==="
-    PLAN_START=\$(date +%s)
-    while [[ ! -f "\$MESSAGES_DIR/planner-status.json" ]] || \
-          [[ "\$(jq -r '.status' "\$MESSAGES_DIR/planner-status.json" 2>/dev/null)" != "done" ]]; do
-      show_progress "\$REPO_DIR" "\$SESSION_NAME" "dev-1" "\$PLAN_START" "planning" "\$MESSAGES_DIR"
-      if wait_or_abort 5; then
-        abort_workflow
-      fi
-    done
+
+    bash "\$MESSAGES_DIR/_run-claude.sh" "\$planner_prompt_file" "\$MESSAGES_DIR/planner.log" \
+      "\$MESSAGES_DIR/costs.log" "\$MESSAGES_DIR/tokens.log" \
+      "\$CFG_PLANNER_TOOLS" "\$REPO_DIR" "\$CFG_PLANNER_MODEL" "\$CFG_PLANNER_TIMEOUT"
+
     echo ""
     echo "  Planner complete."
     print_agent_summary "\$MESSAGES_DIR/planner.log" "planner output"
@@ -519,6 +501,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
   while true; do
     update_summary_phase "\$MESSAGES_DIR" "development"
 
+    DEV_PIDS=()
     for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
       rendered_prompt="\$(render_prompt "\$PROMPTS_DIR/dev-agent.md" \
         "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
@@ -531,23 +514,35 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
 
       update_agent_status "\$MESSAGES_DIR" "dev-\$i" "implementing"
 
-      send_to_pane "\$SESSION_NAME" "dev-\$i" \
-        "bash \$MESSAGES_DIR/_run-claude.sh \$prompt_file \$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log '\$CFG_DEV_TOOLS' \$REPO_DIR \$CFG_DEV_MODEL \$CFG_AGENT_TIMEOUT \$CFG_DEV_FALLBACK_MODEL"
+      echo ""
+      if [[ "\$CFG_CHUNKING_ENABLED" = "true" ]]; then
+        echo "=== Chunk \$CURRENT_CHUNK — Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Dev \$i ==="
+      else
+        echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Dev \$i ==="
+      fi
+
+      touch "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log"
+      bash "\$MESSAGES_DIR/_run-claude.sh" "\$prompt_file" \
+        "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log" \
+        "\$MESSAGES_DIR/costs.log" "\$MESSAGES_DIR/tokens.log" \
+        "\$CFG_DEV_TOOLS" "\$REPO_DIR" "\$CFG_DEV_MODEL" "\$CFG_AGENT_TIMEOUT" "\$CFG_DEV_FALLBACK_MODEL" &
+      DEV_PIDS+=(\$!)
+      open_tab "spex: dev-\$i" "tail -F '\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log'"
     done
 
-    echo ""
-    if [[ "\$CFG_CHUNKING_ENABLED" = "true" ]]; then
-      echo "=== Chunk \$CURRENT_CHUNK — Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Development ==="
-    else
-      echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Development ==="
-    fi
-    DEV_START=\$(date +%s)
+    echo "  Waiting for \$CFG_DEV_AGENTS dev agent(s)..."
     while ! check_dev_status "\$MESSAGES_DIR" "\$CFG_DEV_AGENTS"; do
-      show_progress "\$REPO_DIR" "\$SESSION_NAME" "dev-1" "\$DEV_START" "dev implementing" "\$MESSAGES_DIR"
-      if wait_or_abort 5; then
-        abort_workflow
-      fi
+      sleep 5
     done
+
+    for pid in "\${DEV_PIDS[@]}"; do
+      wait "\$pid" 2>/dev/null || true
+    done
+
+    for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
+      update_agent_status "\$MESSAGES_DIR" "dev-\$i" "done"
+    done
+
     echo ""
     echo "  Dev agent(s) complete."
 
@@ -577,6 +572,8 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       update_summary_phase "\$MESSAGES_DIR" "review"
       update_agent_status "\$MESSAGES_DIR" "reviewer" "reviewing"
 
+      rm -f "\$MESSAGES_DIR/reviewer-feedback.md"
+
       reviewer_prompt="\$(render_prompt "\$PROMPTS_DIR/reviewer-agent.md" \
         "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
         "REVIEWER_SKILLS=${CFG_REVIEWER_SKILLS[*]}" \
@@ -588,21 +585,31 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       reviewer_prompt_file="\$MESSAGES_DIR/reviewer-prompt-r\${CURRENT_ROUND}.md"
       echo "\$reviewer_prompt" > "\$reviewer_prompt_file"
 
-      send_to_pane "\$SESSION_NAME" "reviewer" \
-        "bash \$MESSAGES_DIR/_run-claude.sh \$reviewer_prompt_file \$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log \$MESSAGES_DIR/costs.log \$MESSAGES_DIR/tokens.log '\$CFG_REVIEWER_TOOLS' \$REPO_DIR \$CFG_REVIEWER_MODEL \$CFG_AGENT_TIMEOUT \$CFG_REVIEWER_FALLBACK_MODEL"
-
       if [[ "\$CFG_CHUNKING_ENABLED" = "true" ]]; then
         echo "=== Chunk \$CURRENT_CHUNK — Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
       else
         echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
       fi
-      REV_START=\$(date +%s)
+
+      touch "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log"
+      bash "\$MESSAGES_DIR/_run-claude.sh" "\$reviewer_prompt_file" \
+        "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log" \
+        "\$MESSAGES_DIR/costs.log" "\$MESSAGES_DIR/tokens.log" \
+        "\$CFG_REVIEWER_TOOLS" "\$REPO_DIR" "\$CFG_REVIEWER_MODEL" \
+        "\$CFG_AGENT_TIMEOUT" "\$CFG_REVIEWER_FALLBACK_MODEL" &
+      REVIEWER_PID=\$!
+      open_tab "spex: reviewer" "tail -F '\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log'"
+
+      echo "  Waiting for reviewer..."
       while [[ "\$(get_review_verdict "\$MESSAGES_DIR")" = "pending" ]]; do
-        show_progress "\$REPO_DIR" "\$SESSION_NAME" "reviewer" "\$REV_START" "reviewing" "\$MESSAGES_DIR"
-        if wait_or_abort 5; then
-          abort_workflow
+        if ! kill -0 "\$REVIEWER_PID" 2>/dev/null; then
+          echo "  Reviewer process exited."
+          break
         fi
+        sleep 5
       done
+      wait "\$REVIEWER_PID" 2>/dev/null || true
+
       echo ""
 
       VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
@@ -636,9 +643,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
 
     echo ""
     echo "  Committing WIP and starting next round..."
-    send_to_pane "\$SESSION_NAME" "dev-1" \
-      "cd \$REPO_DIR && git add -A -- . ':!.specify' && git commit -m 'wip: address review feedback'"
-    sleep 5
+    (cd "\$REPO_DIR" && git add -A -- . ':!.specify' && git commit -m 'wip: address review feedback') || true
 
     # Build prior-context.md for next round's dev agents
     PRIOR_FILES=""
@@ -686,9 +691,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
     if [[ "\$CFG_PHASE_COMMIT" = "true" ]]; then
       echo ""
       echo "  Committing chunk \$CURRENT_CHUNK: \$CHUNK_TITLE"
-      send_to_pane "\$SESSION_NAME" "dev-1" \
-        "cd \$REPO_DIR && git add -A -- . ':!.specify' && git commit -m 'feat(chunk-\${CURRENT_CHUNK}): \${CHUNK_TITLE}'"
-      sleep 5
+      (cd "\$REPO_DIR" && git add -A -- . ':!.specify' && git commit -m "feat(chunk-\${CURRENT_CHUNK}): \${CHUNK_TITLE}") || true
       echo "  Committed chunk \$CURRENT_CHUNK / \$TOTAL_CHUNKS."
     else
       echo "  Commit phase skipped (phases.commit=false) for chunk \$CURRENT_CHUNK."
@@ -759,7 +762,7 @@ else
 
     echo "  Proposed commit: feat: \${FEATURE_NAME}"
     if [[ "\$CFG_PHASE_PR" = "true" ]]; then
-      echo "  Proposed PR:     auto-dev: \$FEATURE_NAME"
+      echo "  Proposed PR:     spex: \$FEATURE_NAME"
     fi
     echo ""
     echo "----------------------------------------------"
@@ -800,9 +803,7 @@ else
       update_summary_phase "\$MESSAGES_DIR" "finalizing"
 
       if [[ "\$CFG_PHASE_COMMIT" = "true" ]]; then
-        send_to_pane "\$SESSION_NAME" "dev-1" \
-          "cd \$REPO_DIR && git add -A -- . ':!.specify' && git commit -m 'feat: \${FEATURE_NAME}'"
-        sleep 5
+        (cd "\$REPO_DIR" && git add -A -- . ':!.specify' && git commit -m "feat: \${FEATURE_NAME}") || true
       fi
 
       if [[ "\$CFG_PHASE_PR" = "true" ]]; then
@@ -813,7 +814,7 @@ else
           PR_BODY+="### Changes\n\n\$(grep -A 100 '## Summary' "\$MESSAGES_DIR/reviewer-feedback.md" | head -5)\n\n"
         fi
         PR_BODY+="## Why\n\n"
-        PR_BODY+="Feature requested via auto-dev spec. Implementation validated through \$CURRENT_ROUND round(s) of automated code review.\n\n"
+        PR_BODY+="Feature requested via spex spec. Implementation validated through \$CURRENT_ROUND round(s) of automated code review.\n\n"
         PR_BODY+="## Expected Result / Proof\n\n"
         PR_BODY+="- Review rounds: \$CURRENT_ROUND / \$CFG_MAX_ROUNDS\n"
         PR_BODY+="- Final verdict: **\$VERDICT**\n"
@@ -823,8 +824,7 @@ else
           PR_BODY+="\n<details><summary>Full review</summary>\n\n\$(cat "\$MESSAGES_DIR/reviewer-feedback.md")\n\n</details>\n"
         fi
 
-        send_to_pane "\$SESSION_NAME" "dev-1" \
-          "cd \$REPO_DIR && gh pr create --title 'auto-dev: \$FEATURE_NAME' --body \"\$(echo -e "\$PR_BODY")\""
+        (cd "\$REPO_DIR" && gh pr create --title "spex: \$FEATURE_NAME" --body "\$(echo -e "\$PR_BODY")") || true
       fi
 
       update_summary_phase "\$MESSAGES_DIR" "complete"
@@ -844,7 +844,7 @@ else
       echo "  To commit manually:"
       echo "    cd \$REPO_DIR"
       echo "    git add -A -- . ':!.specify' && git commit -m 'feat: \$FEATURE_NAME'"
-      echo "    gh pr create --title 'auto-dev: \$FEATURE_NAME'"
+      echo "    gh pr create --title 'spex: \$FEATURE_NAME'"
     fi
   fi
 fi
@@ -852,19 +852,10 @@ ORCHEOF
 
 chmod +x "$ORCHESTRATOR_SCRIPT"
 
-# --- Launch orchestrator in summary pane, attach immediately ---
-send_to_pane "$SESSION_NAME" "summary" \
-  "bash $ORCHESTRATOR_SCRIPT 2>&1 | tee $MESSAGES_DIR/orchestrator.log"
+# --- Run orchestrator inline ---
+bash "$ORCHESTRATOR_SCRIPT" 2>&1 | tee "$MESSAGES_DIR/orchestrator.log"
 
-if [[ "$DETACHED" = false ]]; then
-  tmux attach-session -t "$SESSION_NAME"
-else
-  echo "Auto-dev running in detached mode. Attach with: tmux attach -t $SESSION_NAME"
-  # Wait for orchestrator to finish (complete or stopped by user)
-  while true; do
-    PHASE="$(jq -r '.phase' "$MESSAGES_DIR/summary.json" 2>/dev/null || echo "unknown")"
-    [[ "$PHASE" = "complete" || "$PHASE" = "stopped" ]] && break
-    sleep 10
-  done
-  echo "Auto-dev finished (phase: $PHASE)."
+# Cleanup app runner
+if [[ -n "$APP_RUNNER_PID" ]]; then
+  kill "$APP_RUNNER_PID" 2>/dev/null || true
 fi

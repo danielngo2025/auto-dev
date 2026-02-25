@@ -13,68 +13,67 @@ setup() {
 }
 
 teardown() {
-  tmux kill-session -t "auto-dev-test-project" 2>/dev/null || true
   rm -rf "$TEST_DIR"
 }
 
-@test "auto-dev.sh shows help with --help" {
-  run bash auto-dev.sh --help
+@test "spex.sh shows help with --help" {
+  run bash spex.sh --help
   [ "$status" -ne 0 ]
   [[ "$output" == *"Usage"* ]]
 }
 
-@test "auto-dev.sh errors when no specs found" {
-  run bash auto-dev.sh
+@test "spex.sh errors when no specs found" {
+  run bash spex.sh
   [ "$status" -ne 0 ]
   [[ "$output" == *"no spec"* ]]
 }
 
-@test "auto-dev.sh validates spec file exists" {
-  run bash auto-dev.sh --spec /nonexistent/spec.md --repo "$TEST_DIR"
+@test "spex.sh validates spec file exists" {
+  run bash spex.sh --spec /nonexistent/spec.md --repo "$TEST_DIR"
   [ "$status" -ne 0 ]
   [[ "$output" == *"not found"* ]]
 }
 
-@test "auto-dev.sh validates .specify/config.yaml exists" {
+@test "spex.sh validates .specify/config.yaml exists" {
   rm "$TEST_DIR/.specify/config.yaml"
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR"
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR"
   [ "$status" -ne 0 ]
   [[ "$output" == *"config"* ]]
 }
 
-@test "auto-dev.sh --dry-run shows plan without executing" {
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
+@test "spex.sh --dry-run shows plan without executing" {
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"test-project"* ]]
   [[ "$output" == *"Dry run"* ]]
 }
 
-@test "auto-dev.sh --dry-run shows phases" {
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
+@test "spex.sh --dry-run shows phases" {
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"Phases:"* ]]
   [[ "$output" == *"plan=true"* ]]
   [[ "$output" == *"review=true"* ]]
 }
 
-@test "auto-dev.sh --dry-run shows fallback model when set" {
+@test "spex.sh --dry-run shows fallback model when set" {
   yq -i '.workflow.dev_fallback_model = "opus"' "$TEST_DIR/.specify/config.yaml"
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"Dev fallback:"* ]]
   [[ "$output" == *"opus"* ]]
 }
 
-@test "auto-dev.sh --dry-run shows dev and reviewer tools" {
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
+@test "spex.sh --dry-run shows dev and reviewer tools" {
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"Dev tools:"* ]]
   [[ "$output" == *"Reviewer tools:"* ]]
 }
 
-@test "auto-dev.sh --dry-run reflects custom permission tiers" {
+@test "spex.sh --dry-run reflects custom permission tiers" {
   yq -i '.permissions.reviewer_tools = "Read,Grep,Glob"' "$TEST_DIR/.specify/config.yaml"
-  run bash auto-dev.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
+  run bash spex.sh --spec "$TEST_DIR/spec.md" --repo "$TEST_DIR" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"Read,Grep,Glob"* ]]
 }

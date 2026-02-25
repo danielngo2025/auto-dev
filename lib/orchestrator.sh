@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Core workflow engine for auto-dev: manages rounds, agent status, review
+# Core workflow engine for spex: manages rounds, agent status, review
 # verdicts, and phase transitions.
 # Usage: source lib/orchestrator.sh
 
@@ -144,68 +144,6 @@ get_total_tokens() {
     return
   fi
   awk '{s+=$1} END {printf "%d", s+0}' "$tokens_file"
-}
-
-# Prints a live progress line showing elapsed time, files changed, cost, tokens, and recent activity.
-# Args: <repo_dir> <session_name> <pane_role> <start_time> <phase_label> <messages_dir>
-show_progress() {
-  local repo_dir="$1"
-  local session_name="$2"
-  local pane_role="$3"
-  local start_time="$4"
-  local phase_label="$5"
-  local messages_dir="$6"
-
-  local elapsed=$(( $(date +%s) - start_time ))
-  local mins=$(( elapsed / 60 ))
-  local secs=$(( elapsed % 60 ))
-
-  local changed_files
-  changed_files="$(cd "$repo_dir" && git diff --name-only 2>/dev/null)"
-  local file_count
-  file_count="$(echo "$changed_files" | grep -c . 2>/dev/null || echo "0")"
-  local last_file
-  last_file="$(echo "$changed_files" | tail -1 | xargs basename 2>/dev/null || echo "")"
-
-  local cost
-  cost="$(get_total_cost "$messages_dir")"
-  local tokens
-  tokens="$(get_total_tokens "$messages_dir")"
-
-  printf "\r\033[K  [%02d:%02d / %ds] %s | %s files | \$%s | %s tok | %s" \
-    "$mins" "$secs" "$elapsed" "$phase_label" "$file_count" "$cost" "$tokens" "$last_file"
-}
-
-# Waits for a keypress or timeout. Returns 0 if user pressed ESC or 'q' (abort).
-# Loops until the full timeout elapses to avoid rapid polling when non-abort keys arrive.
-# Args: <timeout_seconds>
-wait_or_abort() {
-  local timeout="$1"
-  local deadline=$(( $(date +%s) + timeout ))
-
-  while true; do
-    local remaining=$(( deadline - $(date +%s) ))
-    if (( remaining <= 0 )); then
-      return 1
-    fi
-
-    local key=""
-    if read -rsn1 -t "$remaining" key 2>/dev/null; then
-      if [[ "$key" == "q" || "$key" == "Q" ]]; then
-        return 0
-      fi
-      if [[ "$key" == $'\e' ]]; then
-        local seq=""
-        if ! read -rsn1 -t 0.05 seq 2>/dev/null; then
-          return 0
-        fi
-      fi
-      # Non-abort key — continue waiting for remaining time
-    else
-      # Timeout expired
-      return 1
-    fi
-  done
 }
 
 # Prints the last N lines from an agent's text log file.

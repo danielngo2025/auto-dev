@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 # Scaffolds .specify/ directory in a target repo.
-# Usage: bash templates/init.sh /path/to/repo
+# Usage: bash init.sh [--skills-repo <github-url>] /path/to/repo
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTO_DEV_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SPEX_ROOT="$SCRIPT_DIR"
+SKILLS_REPO=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skills-repo) SKILLS_REPO="$2"; shift 2 ;;
+    --help|-h)
+      echo "Usage: bash init.sh [--skills-repo <github-url>] /path/to/repo"
+      echo ""
+      echo "Options:"
+      echo "  --skills-repo <url>  Clone skills from a GitHub repo (e.g. vendasta/dev-agent-toolkit)"
+      exit 0
+      ;;
+    *) break ;;
+  esac
+done
+
 TARGET_DIR="${1:-.}"
 
 echo "Initializing .specify in: $TARGET_DIR"
@@ -42,6 +58,32 @@ if [[ -d "$TARGET_DIR/.cursor/rules" ]]; then
     fi
     DISCOVERED_SKILLS+=("$base_name")
   done
+fi
+
+# --- Fetch skills from remote repo ---
+if [[ -n "$SKILLS_REPO" ]]; then
+  echo "Fetching skills from $SKILLS_REPO..."
+  TMPDIR_SKILLS="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR_SKILLS"' EXIT
+
+  if git clone --depth 1 --quiet "$SKILLS_REPO" "$TMPDIR_SKILLS/repo" 2>/dev/null || \
+     git clone --depth 1 --quiet "https://github.com/${SKILLS_REPO}.git" "$TMPDIR_SKILLS/repo" 2>/dev/null; then
+    if [[ -d "$TMPDIR_SKILLS/repo/skills" ]]; then
+      for skill_dir in "$TMPDIR_SKILLS/repo/skills"/*/; do
+        [[ ! -d "$skill_dir" ]] && continue
+        skill_name="$(basename "$skill_dir")"
+        if [[ ! -d "$TARGET_DIR/.specify/skills/$skill_name" ]]; then
+          cp -r "$skill_dir" "$TARGET_DIR/.specify/skills/$skill_name"
+          echo "  Fetched skill: $skill_name"
+          DISCOVERED_SKILLS+=("$skill_name")
+        fi
+      done
+    else
+      echo "  Warning: no skills/ directory found in $SKILLS_REPO"
+    fi
+  else
+    echo "  Warning: could not clone $SKILLS_REPO — skipping remote skills"
+  fi
 fi
 
 # --- Detect standards file ---
@@ -135,7 +177,7 @@ else
 fi
 
 # Copy prompt templates
-for prompt in "$AUTO_DEV_ROOT/prompts"/*.md; do
+for prompt in "$SPEX_ROOT/prompts"/*.md; do
   local_name="$(basename "$prompt")"
   if [[ ! -f "$TARGET_DIR/.specify/prompts/$local_name" ]]; then
     cp "$prompt" "$TARGET_DIR/.specify/prompts/$local_name"

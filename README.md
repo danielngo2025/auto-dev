@@ -1,22 +1,16 @@
-# auto-dev
+# spex
 
-Multi-terminal agentic AI workflow that orchestrates Claude CLI agents across tmux panes. A dev agent implements features from markdown specs, a reviewer agent enforces repo-specific coding standards, and the dev agent iterates on feedback — all visible in parallel terminals with a live summary dashboard.
+Agentic AI workflow that orchestrates Claude CLI agents to implement features from markdown specs. A dev agent implements, a reviewer agent enforces coding standards, and the dev agent iterates on feedback — all running inline in your terminal.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    tmux session: auto-dev                │
-├──────────────────┬──────────────────┬───────────────────┤
-│   Dev Agent(s)   │  Reviewer Agent  │   App Runner      │
-│   (claude cli)   │  (claude cli)    │   (user command)  │
-├──────────────────┴──────────────────┴───────────────────┤
-│                   Summary Dashboard                      │
-└─────────────────────────────────────────────────────────┘
+Spec (.md) → Dev Agent → Review Agent → Iterate → Commit → PR
+                 ↑             │
+                 └─────────────┘  (up to max_rounds)
 ```
 
 ## Prerequisites
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
-- [tmux](https://github.com/tmux/tmux) 3.0+
 - [jq](https://jqlang.github.io/jq/) 1.6+
 - [yq](https://github.com/mikefarah/yq) 4.0+
 - [gh](https://cli.github.com/) (GitHub CLI, for PR creation)
@@ -24,21 +18,21 @@ Multi-terminal agentic AI workflow that orchestrates Claude CLI agents across tm
 ### Install dependencies (macOS)
 
 ```bash
-brew install tmux yq jq gh
+brew install yq jq gh
 ```
 
 ## Quick Start
 
-### 1. Clone auto-dev
+### 1. Clone spex
 
 ```bash
-git clone <repo-url> ~/auto-dev
+git clone <repo-url> ~/spex
 ```
 
 ### 2. Initialize your project repo
 
 ```bash
-bash ~/auto-dev/templates/init.sh /path/to/your/repo
+bash ~/spex/init.sh /path/to/your/repo
 ```
 
 This creates a `.specify/` directory in your repo with:
@@ -48,6 +42,8 @@ This creates a `.specify/` directory in your repo with:
 ├── config.yaml     # Workflow settings (edit this)
 ├── messages/       # Agent communication files (runtime)
 ├── prompts/        # Agent prompt templates
+├── specs/          # Feature specs go here
+│   └── chunks/     # Manual chunk files (optional)
 └── skills/         # Repo-specific review skills
 ```
 
@@ -62,11 +58,17 @@ project:
 
 workflow:
   max_rounds: 3          # Max dev-review iterations
-  dev_agents: 1           # Number of parallel dev agents
-
-
-spec:
-  path: "docs/specs/"
+  dev_agents: 1          # Number of dev agents (run sequentially)
+  dev_model: "sonnet"
+  reviewer_model: "haiku"
+  agent_timeout: 900     # Max seconds per agent invocation
+  dev_fallback_model: "opus"   # Retry on timeout/empty output
+  phases:
+    plan: true           # Run planner (requires chunking)
+    dev: true            # Run dev agent(s)
+    review: true         # Run reviewer (false = auto-approve)
+    commit: true         # Git commit after completion
+    pr: true             # Push + PR creation
 
 app_runner:
   command: "go run ./cmd/server"   # Your app start command
@@ -74,37 +76,33 @@ app_runner:
   watch_patterns:
     - "panic:"
     - "FAIL"
-    - "Error:"
-    - "fatal"
 
 reviewer:
   skills:
     - "code-review"
     - "security-review"
-  standards_file: "CLAUDE.md"      # Your repo's coding standards
-  severity_gate: "high"            # Block until no issues >= this
+  standards_file: "CLAUDE.md"
+  severity_gate: "high"
 
-summary:
-  refresh_interval: 5
+permissions:
+  dev_tools: "Edit,Write,Read,Bash,Grep,Glob"
+  reviewer_tools: "Read,Write,Bash,Grep,Glob"
 ```
 
 ### 4. Write a spec
 
-Create a markdown spec file describing the feature:
-
 ```bash
-cat > docs/specs/add-auth.md << 'EOF'
+cat > .specify/specs/add-auth.md << 'EOF'
 # Add Authentication
 
 ## Requirements
 - Add JWT-based authentication middleware
 - Protect all /api/* routes
-- Add login endpoint at POST /auth/login
 - Return 401 for unauthenticated requests
 
 ## Acceptance Criteria
 - All existing tests continue to pass
-- New tests cover auth middleware and login endpoint
+- New tests cover auth middleware
 - No hardcoded secrets
 EOF
 ```
@@ -112,217 +110,144 @@ EOF
 ### 5. Run
 
 ```bash
-bash ~/auto-dev/auto-dev.sh --spec docs/specs/add-auth.md --repo .
+bash ~/spex/spex.sh --repo .
 ```
 
-This opens a tmux session with four panes where you can watch the agents work in real time.
+Spex auto-discovers spec files in `.specify/specs/`. You can also specify one directly:
+
+```bash
+bash ~/spex/spex.sh --spec .specify/specs/add-auth.md --repo .
+```
 
 ## Usage
 
 ```
-auto-dev.sh --spec <spec.md> --repo <path> [--dry-run] [--detached]
+spex.sh [--spec <spec.md>] --repo <path> [--dry-run]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--spec <file>` | Path to the feature spec markdown file (required) |
+| `--spec <file>` | Path to the feature spec (default: auto-discover from `.specify/specs/`) |
 | `--repo <path>` | Path to the target repository (default: `.`) |
 | `--dry-run` | Show the execution plan without running |
-| `--detached` | Run tmux session in detached mode (for CI/automation) |
 
 ### Dry run
 
-Preview what will happen without executing:
-
 ```bash
-bash ~/auto-dev/auto-dev.sh --spec docs/specs/add-auth.md --repo . --dry-run
-```
-
-Output:
-
-```
-=== Dry run: Auto-Dev Execution Plan ===
-
-Project:      my-service
-Spec:         docs/specs/add-auth.md
-Dev agents:   1
-Max rounds:   3
-App command:  go run ./cmd/server
-Review skills: code-review security-review
-Severity gate: high
-
-Panes: summary | app-runner | reviewer | dev-1
-
-Dry run complete. Remove --dry-run to execute.
-```
-
-### Detached mode (CI)
-
-Run headless for automation pipelines:
-
-```bash
-bash ~/auto-dev/auto-dev.sh --spec docs/specs/add-auth.md --repo . --detached
-```
-
-Attach later with:
-
-```bash
-tmux attach -t auto-dev-my-service
+bash ~/spex/spex.sh --repo . --dry-run
 ```
 
 ## How It Works
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
+
 ### Workflow Phases
 
-```
-Setup → Development → Review → Iteration → Finalize
-                        ↑          │
-                        └──────────┘  (up to max_rounds)
-```
-
-**Phase 1: Setup**
-- Reads `.specify/config.yaml`
-- Creates tmux session with panes
-- Starts the app runner
-
-
-**Phase 2: Development**
-- Dev agent reads the spec
-- Implements the feature following `CLAUDE.md` standards
-- Runs tests
-- Monitors app output for failures
-- Leaves changes uncommitted and writes status
-
-**Phase 3: Review**
-- Reviewer agent reviews local (uncommitted) changes via `git diff`
-- Runs each configured review skill
-- Checks app output for runtime issues
-- Writes structured feedback with severity ratings
-- Gives verdict: `approved` or `changes_requested`
-
-**Phase 4: Iteration**
-- If `changes_requested` and under `max_rounds`: orchestrator commits WIP, dev agent reads feedback, fixes issues, reviewer reviews again
-- If `approved` or at `max_rounds`: proceed to finalize
-
-**Phase 5: Finalize**
-- Commits the approved changes
-- Creates a PR with structured description (What / Why / Expected Result)
+1. **Setup** — Reads config, starts app runner in background
+2. **Planning** (optional) — Planner agent decomposes spec into chunks
+3. **Development** — Dev agent implements the feature, runs tests
+4. **Review** — Reviewer agent checks code against standards, gives verdict
+5. **Iteration** — If `changes_requested` and under `max_rounds`: dev fixes issues
+6. **Finalize** — Prompts for approval, commits changes, creates PR
 
 ### Agent Communication
 
-Agents communicate through shared files in `.specify/messages/`:
+Agents coordinate through shared files in `.specify/messages/`:
 
 | File | Written by | Read by |
 |------|-----------|---------|
 | `spec.md` | Launcher | Dev agent |
-| `dev-N-status.json` | Dev agent | Reviewer, Orchestrator |
+| `dev-N-status.json` | Dev agent | Orchestrator |
 | `reviewer-feedback.md` | Reviewer | Dev agent |
 | `app-output.log` | App runner | Dev agent, Reviewer |
 | `summary.json` | Orchestrator | Dashboard |
-
-### Summary Dashboard
-
-The bottom tmux pane shows a live dashboard:
-
-```
-╔══════════════════════════════════════════════════╗
-║  AUTO-DEV: add-auth                              ║
-╠══════════════════════════════════════════════════╣
-║  Spec:    docs/specs/add-auth.md                 ║
-
-║  Round:   2 / 3                                  ║
-║  Phase:   iteration                              ║
-╠══════════════════════════════════════════════════╣
-║  AGENTS                                          ║
-║    ● Dev-1: implementing (12 files)              ║
-║    ○ Reviewer: waiting                           ║
-║    ● App: running (healthy)                      ║
-╠══════════════════════════════════════════════════╣
-║  REVIEW (Round 1)                                ║
-║    Critical: 0  High: 1  Medium: 3  Low: 5      ║
-║    Verdict: changes_requested                    ║
-╠══════════════════════════════════════════════════╣
-║  APP OUTPUT (last 3 lines)                       ║
-║    [INFO] Server started on :8080                ║
-║    [INFO] GET /health 200 1ms                    ║
-║    [INFO] Connected to database                  ║
-╚══════════════════════════════════════════════════╝
-```
+| `prior-context.md` | Orchestrator | Dev agent (next round) |
 
 ## Configuration
 
-### Reviewer Skills
+### Phase Toggles
 
-Each repo defines which review checks to run. Add skill names to `reviewer.skills` in your config:
-
-```yaml
-reviewer:
-  skills:
-    - "code-review"        # General code quality
-    - "security-review"    # Security vulnerability scan
-    - "test-coverage"      # Test coverage verification
-```
-
-These map to Claude Code skills or custom skills in `.specify/skills/`.
-
-### Severity Gate
-
-The `severity_gate` controls when the reviewer approves:
-
-| Gate | Meaning |
-|------|---------|
-| `critical` | Only block on critical issues |
-| `high` | Block on critical + high issues |
-| `medium` | Block on critical + high + medium issues |
-| `low` | Block on any issue |
-
-### Multiple Dev Agents
-
-For large features, split work across multiple agents:
+Disable phases you don't need:
 
 ```yaml
 workflow:
-  dev_agents: 3    # Spawns 3 dev panes
+  phases:
+    review: false   # Skip review, auto-approve
+    pr: false       # Don't create PR
 ```
 
-Or set to `"auto"` to let the orchestrator split the spec into sub-tasks.
+### Retry with Fallback
 
-### App Runner
-
-Configure the command to start your application:
+If an agent times out or produces no output, retry with a different model:
 
 ```yaml
-app_runner:
-  command: "npm run dev"
-  health_check: "curl -s http://localhost:3000"
-  watch_patterns:
-    - "Error:"
-    - "FAIL"
-    - "TypeError"
-    - "Cannot find module"
+workflow:
+  dev_fallback_model: "opus"
+  reviewer_fallback_model: "sonnet"
 ```
 
-Set `command: ""` to disable app monitoring.
+### Permission Tiers
 
-### Watch Patterns
+Control which Claude tools each agent can use:
 
-Strings to watch for in the app runner output. If any pattern appears, the dev agent attempts to fix the issue before continuing.
-
-## Claude Code Skill
-
-Install the `/auto-dev` slash command:
-
-```bash
-cp ~/auto-dev/skills/auto-dev.md ~/.claude/commands/auto-dev.md
+```yaml
+permissions:
+  dev_tools: "Edit,Write,Read,Bash,Grep,Glob"
+  reviewer_tools: "Read,Grep,Glob"          # Read-only reviewer
 ```
 
-Then use it in any Claude Code session:
+### Context Compaction
+
+Summarize agent logs between rounds to reduce token usage:
+
+```yaml
+context_compaction:
+  enabled: true
+  model: "haiku"
+  max_log_chars: 50000
+```
+
+### Chunking
+
+Break large features into sequential chunks:
+
+**Auto-chunking** (planner agent decomposes the spec):
+
+```yaml
+chunking:
+  enabled: true
+  max_chunks: 5
+  planner_model: "sonnet"
+```
+
+**Manual chunks** (you create the files):
 
 ```
-> /auto-dev docs/specs/add-auth.md
+.specify/specs/chunks/
+├── 01-setup-models.md
+├── 02-add-api-routes.md
+└── 03-write-tests.md
 ```
 
-## Customizing Prompt Templates
+### Severity Gate
+
+| Gate | Blocks on |
+|------|-----------|
+| `critical` | Critical issues only |
+| `high` | Critical + high issues |
+| `medium` | Critical + high + medium |
+| `low` | Any issue |
+
+### Skip Specs
+
+Skip specific chunk files:
+
+```yaml
+skip_specs:
+  - "01-setup.md"    # Already done
+```
+
+## Customizing Prompts
 
 Agent behavior is defined in `.specify/prompts/`:
 
@@ -330,68 +255,27 @@ Agent behavior is defined in `.specify/prompts/`:
 |------|----------|
 | `dev-agent.md` | How the dev agent implements features |
 | `reviewer-agent.md` | What the reviewer checks and how it reports |
-| `orchestrator.md` | Phase transition logic |
+| `planner-agent.md` | How the planner decomposes specs into chunks |
 
 Templates use `{{PLACEHOLDER}}` syntax. Available placeholders:
 
 | Placeholder | Source |
 |-------------|--------|
-| `{{STANDARDS_FILE}}` | `reviewer.standards_file` from config |
-| `{{WATCH_PATTERNS}}` | `app_runner.watch_patterns` from config |
+| `{{STANDARDS_FILE}}` | `reviewer.standards_file` |
+| `{{WATCH_PATTERNS}}` | `app_runner.watch_patterns` |
 | `{{AGENT_ID}}` | Dev agent number (1, 2, ...) |
 | `{{ROUND}}` | Current round number |
-| `{{REVIEWER_SKILLS}}` | `reviewer.skills` from config |
-| `{{SEVERITY_GATE}}` | `reviewer.severity_gate` from config |
+| `{{SEVERITY_GATE}}` | `reviewer.severity_gate` |
 | `{{SKILLS_LIST}}` | Formatted list of review skills |
-| `{{MAX_ROUNDS}}` | `workflow.max_rounds` from config |
-| `{{PHASE}}` | Current workflow phase |
-
-Edit these templates to customize agent behavior for your team's workflow.
-
-## Project Structure
-
-```
-auto-dev/
-├── auto-dev.sh              # Main launcher script
-├── lib/
-│   ├── config-parser.sh     # YAML config → shell variables
-│   ├── tmux-setup.sh        # tmux session/pane management
-│   ├── orchestrator.sh      # Round management, state transitions
-│   ├── prompt-renderer.sh   # {{PLACEHOLDER}} substitution
-│   └── summary-watcher.sh   # Live TUI dashboard
-├── prompts/
-│   ├── dev-agent.md         # Dev agent system prompt
-│   ├── reviewer-agent.md    # Reviewer agent system prompt
-│   └── orchestrator.md      # Orchestrator system prompt
-├── skills/
-│   └── auto-dev.md          # Claude Code /auto-dev skill
-├── templates/
-│   ├── config.yaml          # Default config template
-│   └── init.sh              # Repo scaffolding script
-├── tests/                   # 70 bats tests
-└── docs/plans/              # Design and implementation docs
-```
+| `{{MAX_CHUNKS}}` | `chunking.max_chunks` |
 
 ## Running Tests
 
 ```bash
-# Run all tests
 bats tests/*.bats
-
-# Run a specific test file
-bats tests/orchestrator.bats
-
-# Run with verbose output
-bats tests/*.bats --verbose-run
 ```
 
 ## Troubleshooting
-
-### tmux session already exists
-
-```bash
-tmux kill-session -t auto-dev-<project-name>
-```
 
 ### Agent not starting
 
@@ -404,7 +288,7 @@ claude "hello"
 
 ### App runner not working
 
-Verify the command in your config works standalone:
+Verify the command works standalone:
 
 ```bash
 cd /your/repo && <your-app-command>
@@ -412,11 +296,9 @@ cd /your/repo && <your-app-command>
 
 ### Review never completes
 
-Check `.specify/messages/reviewer-feedback.md` for the reviewer's output. The reviewer waits for all dev status files to show `"status": "done"` before starting.
+Check `.specify/messages/reviewer-feedback.md` for the reviewer's output.
 
 ### Stale state from previous run
-
-Clear the messages directory:
 
 ```bash
 rm -rf .specify/messages/*
