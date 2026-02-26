@@ -347,6 +347,12 @@ VERDICT=""
 DEV_PIDS=()
 REVIEWER_PID=""
 
+# Productivity tracking
+WORKFLOW_START=\$SECONDS
+TOTAL_DEV_SECS=0
+TOTAL_REVIEW_SECS=0
+FIRST_ROUND_VERDICT=""
+
 kill_agent_pids() {
   for pid in "\${DEV_PIDS[@]:-}"; do
     kill "\$pid" 2>/dev/null || true
@@ -364,21 +370,35 @@ abort_workflow() {
 }
 trap abort_workflow INT TERM
 
-# Waits for a condition while showing elapsed timer. ESC kills active agents.
+# Checks if any tracked PID is still alive. Returns 0 if at least one alive.
+any_pid_alive() {
+  for pid in "\${DEV_PIDS[@]:-}" "\${REVIEWER_PID:-}"; do
+    [[ -n "\$pid" ]] && kill -0 "\$pid" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# Waits for a condition while showing elapsed timer. ESC aborts workflow.
+# Breaks early if all agent PIDs die (crash/timeout without writing status).
 # Args: <label> <check_command>
-# check_command is eval'd each tick; return 0 = done, 1 = keep waiting.
 wait_with_timer() {
   local label="\$1"
   local check_cmd="\$2"
   local start_time=\$SECONDS
 
   while ! eval "\$check_cmd"; do
+    # Break if all agent PIDs have died without satisfying the check
+    if ! any_pid_alive; then
+      echo ""
+      echo "  Warning: agent process(es) exited without completing."
+      break
+    fi
+
     local elapsed=\$(( SECONDS - start_time ))
     local mins=\$(( elapsed / 60 ))
     local secs=\$(( elapsed % 60 ))
-    printf "\r  %s — %dm %02ds (ESC to abort agent)  " "\$label" "\$mins" "\$secs"
+    printf "\r  %s — %dm %02ds (ESC to abort)  " "\$label" "\$mins" "\$secs"
 
-    # Check for ESC key (non-blocking read from /dev/tty)
     if read -rsn1 -t 2 key </dev/tty 2>/dev/null; then
       if [[ "\$key" == \$'\x1b' ]]; then
         echo ""
@@ -390,6 +410,81 @@ wait_with_timer() {
   local mins=\$(( elapsed / 60 ))
   local secs=\$(( elapsed % 60 ))
   printf "\r  %s — done in %dm %02ds              \n" "\$label" "\$mins" "\$secs"
+}
+
+# Checks app-output.log for failure patterns. Returns 0 if healthy, 1 if failures found.
+check_app_health() {
+  local app_log="\$MESSAGES_DIR/app-output.log"
+  [[ ! -f "\$app_log" ]] && return 0
+  local patterns=(\$WATCH_PATTERNS_STR)
+  for pat in "\${patterns[@]}"; do
+    pat="\$(echo "\$pat" | tr -d '"')"
+    if grep -q "\$pat" "\$app_log" 2>/dev/null; then
+      echo "  Warning: app-output.log contains failure pattern: \$pat"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Prints end-of-run productivity summary report
+print_run_summary() {
+  local total_elapsed=\$(( SECONDS - WORKFLOW_START ))
+  local total_mins=\$(( total_elapsed / 60 ))
+  local total_secs=\$(( total_elapsed % 60 ))
+  local dev_mins=\$(( TOTAL_DEV_SECS / 60 ))
+  local dev_secs=\$(( TOTAL_DEV_SECS % 60 ))
+  local rev_mins=\$(( TOTAL_REVIEW_SECS / 60 ))
+  local rev_secs=\$(( TOTAL_REVIEW_SECS % 60 ))
+  local other_secs=\$(( total_elapsed - TOTAL_DEV_SECS - TOTAL_REVIEW_SECS ))
+  local other_mins=\$(( other_secs / 60 ))
+  other_secs=\$(( other_secs % 60 ))
+
+  local final_tokens="\$(get_total_tokens "\$MESSAGES_DIR")"
+
+  echo ""
+  echo "=============================================="
+  echo "  RUN SUMMARY"
+  echo "=============================================="
+  echo ""
+  printf "  %-22s %dm %02ds\n" "Total elapsed:" "\$total_mins" "\$total_secs"
+  printf "  %-22s %dm %02ds\n" "  Development:" "\$dev_mins" "\$dev_secs"
+  printf "  %-22s %dm %02ds\n" "  Review:" "\$rev_mins" "\$rev_secs"
+  printf "  %-22s %dm %02ds\n" "  Overhead:" "\$other_mins" "\$other_secs"
+  echo ""
+  printf "  %-22s %s / %s\n" "Rounds:" "\$CURRENT_ROUND" "\$CFG_MAX_ROUNDS"
+  printf "  %-22s %s\n" "Final verdict:" "\$VERDICT"
+  if [[ -n "\$FIRST_ROUND_VERDICT" ]]; then
+    printf "  %-22s %s\n" "First-round verdict:" "\$FIRST_ROUND_VERDICT"
+  fi
+  printf "  %-22s %s\n" "Tokens consumed:" "\$final_tokens"
+  echo ""
+
+  # Review score if available
+  if [[ -f "\$MESSAGES_DIR/reviewer-feedback.md" ]]; then
+    local score="\$(grep -o 'Score: [0-9]*/10' "\$MESSAGES_DIR/reviewer-feedback.md" | tail -1)"
+    [[ -n "\$score" ]] && printf "  %-22s %s\n" "Review score:" "\$score"
+
+    local critical=\$(grep -c '^\- \[' "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null | head -1 || echo "0")
+    local findings=""
+    for sev in CRITICAL HIGH MEDIUM LOW; do
+      local count=\$(sed -n "/^### \$sev/,/^### /p" "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null | grep -c '^\- ' || echo "0")
+      [[ "\$count" -gt 0 ]] && findings+="\$sev:\$count "
+    done
+    [[ -n "\$findings" ]] && printf "  %-22s %s\n" "Findings:" "\$findings"
+  fi
+
+  # Git diff stats
+  local diff_stat="\$(cd "\$REPO_DIR" && git diff --stat HEAD 2>/dev/null)"
+  if [[ -n "\$diff_stat" ]]; then
+    local files_changed="\$(echo "\$diff_stat" | tail -1 | grep -o '[0-9]* file' | grep -o '[0-9]*')"
+    local insertions="\$(echo "\$diff_stat" | tail -1 | grep -o '[0-9]* insertion' | grep -o '[0-9]*')"
+    local deletions="\$(echo "\$diff_stat" | tail -1 | grep -o '[0-9]* deletion' | grep -o '[0-9]*')"
+    echo ""
+    printf "  %-22s %s file(s)\n" "Files changed:" "\${files_changed:-0}"
+    printf "  %-22s +%s / -%s\n" "Lines:" "\${insertions:-0}" "\${deletions:-0}"
+  fi
+  echo ""
 }
 
 echo "  Press ESC or Ctrl+C to abort."
@@ -533,6 +628,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
     update_summary_phase "\$MESSAGES_DIR" "development"
 
     DEV_PIDS=()
+    DEV_PHASE_START=\$SECONDS
     for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
       rendered_prompt="\$(render_prompt "\$PROMPTS_DIR/dev-agent.md" \
         "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
@@ -571,8 +667,14 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       update_agent_status "\$MESSAGES_DIR" "dev-\$i" "done"
     done
 
+    TOTAL_DEV_SECS=\$((TOTAL_DEV_SECS + SECONDS - DEV_PHASE_START))
     RUNNING_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
     echo "  Dev complete. Tokens so far: \$RUNNING_TOKENS"
+
+    if ! check_app_health; then
+      echo "  App failure detected after dev round \$CURRENT_ROUND."
+      tail -5 "\$MESSAGES_DIR/app-output.log" 2>/dev/null | sed 's/^/    /'
+    fi
 
     for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
       print_agent_summary "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log" "dev-\$i output"
@@ -601,6 +703,7 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       update_agent_status "\$MESSAGES_DIR" "reviewer" "reviewing"
 
       rm -f "\$MESSAGES_DIR/reviewer-feedback.md"
+      REVIEW_PHASE_START=\$SECONDS
 
       reviewer_prompt="\$(render_prompt "\$PROMPTS_DIR/reviewer-agent.md" \
         "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
@@ -633,7 +736,10 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
       wait "\$REVIEWER_PID" 2>/dev/null || true
 
       VERDICT="\$(get_review_verdict "\$MESSAGES_DIR")"
+      TOTAL_REVIEW_SECS=\$((TOTAL_REVIEW_SECS + SECONDS - REVIEW_PHASE_START))
       update_agent_status "\$MESSAGES_DIR" "reviewer" "done"
+
+      [[ -z "\$FIRST_ROUND_VERDICT" ]] && FIRST_ROUND_VERDICT="\$VERDICT"
 
       RUNNING_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
       echo "  Verdict: \$VERDICT | Tokens so far: \$RUNNING_TOKENS"
@@ -747,6 +853,8 @@ if [[ "\$CFG_CHUNKING_ENABLED" = "true" ]]; then
   echo "  Chunks:   \$TOTAL_CHUNKS"
   echo "  Total cost: \\\$\$FINAL_COST | Total tokens: \$FINAL_TOKENS"
 
+  print_run_summary
+
 else
   # --- NON-CHUNKED FINALIZATION (original flow) ---
 
@@ -760,6 +868,8 @@ else
     echo "  Changes remain uncommitted in: \$REPO_DIR"
     echo "  Total cost: \\\$\$FINAL_COST | Total tokens: \$FINAL_TOKENS"
 
+    print_run_summary
+
   else
     update_summary_phase "\$MESSAGES_DIR" "awaiting_approval"
 
@@ -772,6 +882,8 @@ else
     echo "  Rounds:   \$CURRENT_ROUND / \$CFG_MAX_ROUNDS"
     echo "  Verdict:  \$VERDICT"
     echo ""
+    print_run_summary
+
     echo "  Modified files:"
     git diff --stat HEAD 2>/dev/null | sed 's/^/    /'
     echo ""
@@ -855,6 +967,7 @@ else
       echo ""
       echo "  Auto-dev complete."
       echo "  Total cost: \\\$\$FINAL_COST | Total tokens: \$FINAL_TOKENS"
+
     else
       update_summary_phase "\$MESSAGES_DIR" "stopped"
       FINAL_COST="\$(get_total_cost "\$MESSAGES_DIR")"
