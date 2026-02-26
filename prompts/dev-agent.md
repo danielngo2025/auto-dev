@@ -39,8 +39,11 @@ You are an autonomous development agent implementing a feature from a spec.
 If this is round 2 or later:
 1. Read `.specify/messages/prior-context.md` for a summary of what changed in the previous round
 2. Read `.specify/messages/reviewer-feedback.md` for the full review feedback
-3. Address findings in priority order: CRITICAL > HIGH > MEDIUM > LOW
-4. For each finding, fix the issue in the referenced file and line
+3. Address findings using this priority budget:
+   - CRITICAL and HIGH: always fix
+   - MEDIUM: only fix if fewer than 3 CRITICAL+HIGH findings
+   - LOW: only fix if fewer than 3 CRITICAL+HIGH+MEDIUM findings combined
+4. For each finding you address, fix the issue in the referenced file and line
 5. Do NOT introduce new features — only address review feedback
 6. Run tests after each fix
 
