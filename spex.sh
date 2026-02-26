@@ -304,8 +304,9 @@ if [[ ($exit_code -eq 124 || ! -s "$log_file") && -n "$fallback_model" && "$fall
   fi
 fi
 
-char_count=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ' || echo "0")
-est_tokens=$((char_count / 4))
+output_chars=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ' || echo "0")
+prompt_chars=$(wc -c < "$prompt_file" 2>/dev/null | tr -d ' ' || echo "0")
+est_tokens=$(( (output_chars + prompt_chars) / 4 ))
 echo "$est_tokens" >> "$tokens_file"
 echo "0" >> "$costs_file"
 RUNEOF
@@ -499,11 +500,11 @@ print_run_summary() {
     local score="\$(grep -o 'Score: [0-9]*/10' "\$MESSAGES_DIR/reviewer-feedback.md" | tail -1)"
     [[ -n "\$score" ]] && printf "  %-22s %s\n" "Review score:" "\$score"
 
-    local critical=\$(grep -c '^\- \[' "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null | head -1 || echo "0")
+    local critical=\$(grep -c '^\- \[' "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null || true)
     local findings=""
     for sev in CRITICAL HIGH MEDIUM LOW; do
-      local count=\$(sed -n "/^### \$sev/,/^### /p" "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null | grep -c '^\- ' || echo "0")
-      [[ "\$count" -gt 0 ]] && findings+="\$sev:\$count "
+      local count=\$(sed -n "/^### \$sev/,/^### /p" "\$MESSAGES_DIR/reviewer-feedback.md" 2>/dev/null | grep -c '^\- ' || true)
+      [[ "\$count" -gt 0 ]] 2>/dev/null && findings+="\$sev:\$count "
     done
     [[ -n "\$findings" ]] && printf "  %-22s %s\n" "Findings:" "\$findings"
   fi
@@ -705,6 +706,14 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
     TOTAL_DEV_SECS=\$((TOTAL_DEV_SECS + SECONDS - DEV_PHASE_START))
     RUNNING_TOKENS="\$(get_total_tokens "\$MESSAGES_DIR")"
     echo "  Dev complete. Tokens so far: \$RUNNING_TOKENS"
+
+    # Show modified files
+    changed_files="\$(cd "\$REPO_DIR" && git diff --name-only HEAD 2>/dev/null)"
+    if [[ -n "\$changed_files" ]]; then
+      file_count=\$(echo "\$changed_files" | wc -l | tr -d ' ')
+      echo "  Modified files (\$file_count):"
+      echo "\$changed_files" | sed 's/^/    /'
+    fi
 
     if ! check_app_health; then
       echo "  App failure detected after dev round \$CURRENT_ROUND."
