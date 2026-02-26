@@ -7,7 +7,6 @@ source "$SCRIPT_DIR/lib/config-parser.sh"
 source "$SCRIPT_DIR/lib/orchestrator.sh"
 source "$SCRIPT_DIR/lib/prompt-renderer.sh"
 source "$SCRIPT_DIR/lib/summary-watcher.sh"
-source "$SCRIPT_DIR/lib/terminal.sh"
 
 # --- Argument parsing ---
 SPEC_FILE=""
@@ -157,6 +156,7 @@ fi
 # --- Setup ---
 mkdir -p "$MESSAGES_DIR"
 rm -f "$MESSAGES_DIR/costs.log" "$MESSAGES_DIR/tokens.log"
+rm -f "$MESSAGES_DIR"/dev-*-status.json "$MESSAGES_DIR/reviewer-feedback.md"
 
 if [[ "$MANUAL_CHUNKS" = "true" ]]; then
   # Manual chunks: copy each file to messages/chunks/, build plan.json
@@ -202,7 +202,6 @@ if [[ -n "$CFG_APP_COMMAND" ]]; then
   bash -c "cd '$REPO_DIR' && $CFG_APP_COMMAND" < /dev/null > "$MESSAGES_DIR/app-output.log" 2>&1 &
   APP_RUNNER_PID=$!
   echo "  App runner started (PID: $APP_RUNNER_PID)"
-  open_tab "spex: app" "tail -F '$MESSAGES_DIR/app-output.log'"
 fi
 
 # Build skills list and watch patterns strings for prompt rendering
@@ -210,6 +209,23 @@ SKILLS_LIST=""
 for skill in "${CFG_REVIEWER_SKILLS[@]}"; do
   SKILLS_LIST="${SKILLS_LIST}   - ${skill}\n"
 done
+
+# Build dev skills list from .specify/skills/ directory
+DEV_SKILLS_LIST=""
+SKILLS_DIR="$REPO_DIR/.specify/skills"
+if [[ -d "$SKILLS_DIR" ]]; then
+  for skill_entry in "$SKILLS_DIR"/*; do
+    [[ ! -e "$skill_entry" ]] && continue
+    skill_name="$(basename "$skill_entry")"
+    if [[ -d "$skill_entry" && -f "$skill_entry/SKILL.md" ]]; then
+      DEV_SKILLS_LIST="${DEV_SKILLS_LIST}  - .specify/skills/${skill_name}/SKILL.md
+"
+    elif [[ -f "$skill_entry" ]]; then
+      DEV_SKILLS_LIST="${DEV_SKILLS_LIST}  - .specify/skills/${skill_name}
+"
+    fi
+  done
+fi
 
 WATCH_PATTERNS_STR=""
 for pattern in "${CFG_WATCH_PATTERNS[@]}"; do
@@ -304,7 +320,6 @@ set -euo pipefail
 SCRIPT_DIR="$SCRIPT_DIR"
 source "\$SCRIPT_DIR/lib/orchestrator.sh"
 source "\$SCRIPT_DIR/lib/prompt-renderer.sh"
-source "\$SCRIPT_DIR/lib/terminal.sh"
 
 MESSAGES_DIR="$MESSAGES_DIR"
 PROMPTS_DIR="$PROMPTS_DIR"
@@ -378,20 +393,39 @@ any_pid_alive() {
   return 1
 }
 
-# Waits for a condition while showing elapsed timer. ESC aborts workflow.
-# Breaks early if all agent PIDs die (crash/timeout without writing status).
-# Args: <label> <check_command>
+# Waits for a condition while showing elapsed timer and live agent output.
+# ESC aborts workflow. Breaks early if all agent PIDs die.
+# Args: <label> <check_command> [log_file_glob]
 wait_with_timer() {
   local label="\$1"
   local check_cmd="\$2"
+  local log_glob="\${3:-}"
   local start_time=\$SECONDS
+  declare -A _log_offsets
 
   while ! eval "\$check_cmd"; do
-    # Break if all agent PIDs have died without satisfying the check
     if ! any_pid_alive; then
       echo ""
       echo "  Warning: agent process(es) exited without completing."
       break
+    fi
+
+    # Show new lines from agent log files
+    if [[ -n "\$log_glob" ]]; then
+      for lf in \$log_glob; do
+        [[ -f "\$lf" ]] || continue
+        local cur_lines=\$(wc -l < "\$lf" | tr -d ' ')
+        local prev=\${_log_offsets["\$lf"]:-0}
+        if (( cur_lines > prev )); then
+          local new_count=\$(( cur_lines - prev ))
+          printf "\r%*s\r" 80 ""
+          tail -n "\$new_count" "\$lf" | while IFS= read -r line; do
+            local trimmed="\$(echo "\$line" | sed 's/^[[:space:]]*//' | cut -c1-120)"
+            [[ -n "\$trimmed" ]] && printf "  │ %s\n" "\$trimmed"
+          done
+          _log_offsets["\$lf"]=\$cur_lines
+        fi
+      done
     fi
 
     local elapsed=\$(( SECONDS - start_time ))
@@ -629,12 +663,14 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
 
     DEV_PIDS=()
     DEV_PHASE_START=\$SECONDS
+    rm -f "\$MESSAGES_DIR"/dev-*-status.json
     for ((i = 1; i <= CFG_DEV_AGENTS; i++)); do
       rendered_prompt="\$(render_prompt "\$PROMPTS_DIR/dev-agent.md" \
         "STANDARDS_FILE=\$CFG_STANDARDS_FILE" \
         "WATCH_PATTERNS=\$WATCH_PATTERNS_STR" \
         "AGENT_ID=\$i" \
-        "ROUND=\$CURRENT_ROUND")"
+        "ROUND=\$CURRENT_ROUND" \
+        "DEV_SKILLS=$DEV_SKILLS_LIST")"
 
       prompt_file="\$MESSAGES_DIR/dev-\${i}-prompt-r\${CURRENT_ROUND}.md"
       echo "\$rendered_prompt" > "\$prompt_file"
@@ -648,16 +684,15 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
         echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Dev \$i ==="
       fi
 
-      touch "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log"
+      : > "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log"
       bash "\$MESSAGES_DIR/_run-claude.sh" "\$prompt_file" \
         "\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log" \
         "\$MESSAGES_DIR/costs.log" "\$MESSAGES_DIR/tokens.log" \
         "\$CFG_DEV_TOOLS" "\$REPO_DIR" "\$CFG_DEV_MODEL" "\$CFG_AGENT_TIMEOUT" "\$CFG_DEV_FALLBACK_MODEL" &
       DEV_PIDS+=(\$!)
-      open_tab "spex: dev-\$i" "tail -F '\$MESSAGES_DIR/dev-\${i}-r\${CURRENT_ROUND}.log'"
     done
 
-    wait_with_timer "Dev agent(s) working" "check_dev_status '\$MESSAGES_DIR' '\$CFG_DEV_AGENTS'"
+    wait_with_timer "Dev agent(s) working" "check_dev_status '\$MESSAGES_DIR' '\$CFG_DEV_AGENTS'" "\$MESSAGES_DIR/dev-*-r\${CURRENT_ROUND}.log"
 
     for pid in "\${DEV_PIDS[@]}"; do
       wait "\$pid" 2>/dev/null || true
@@ -722,16 +757,15 @@ for ((CURRENT_CHUNK = 1; CURRENT_CHUNK <= TOTAL_CHUNKS; CURRENT_CHUNK++)); do
         echo "=== Round \$CURRENT_ROUND / \$CFG_MAX_ROUNDS — Review ==="
       fi
 
-      touch "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log"
+      : > "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log"
       bash "\$MESSAGES_DIR/_run-claude.sh" "\$reviewer_prompt_file" \
         "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log" \
         "\$MESSAGES_DIR/costs.log" "\$MESSAGES_DIR/tokens.log" \
         "\$CFG_REVIEWER_TOOLS" "\$REPO_DIR" "\$CFG_REVIEWER_MODEL" \
         "\$CFG_AGENT_TIMEOUT" "\$CFG_REVIEWER_FALLBACK_MODEL" &
       REVIEWER_PID=\$!
-      open_tab "spex: reviewer" "tail -F '\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log'"
 
-      wait_with_timer "Reviewer working" '[[ "\$(get_review_verdict "\$MESSAGES_DIR")" != "pending" ]] || ! kill -0 "\$REVIEWER_PID" 2>/dev/null'
+      wait_with_timer "Reviewer working" '[[ "\$(get_review_verdict "\$MESSAGES_DIR")" != "pending" ]] || ! kill -0 "\$REVIEWER_PID" 2>/dev/null' "\$MESSAGES_DIR/reviewer-r\${CURRENT_ROUND}.log"
 
       wait "\$REVIEWER_PID" 2>/dev/null || true
 
